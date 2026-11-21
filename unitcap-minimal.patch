@@ -1879,7 +1879,7 @@ index 0000000..23e37a4
 +
 +} // namespace ui
 diff --git a/src/ui/page_system.cpp b/src/ui/page_system.cpp
-index 8a5d574..d497c24 100644
+index 8a5d574..2c7bd70 100644
 --- a/src/ui/page_system.cpp
 +++ b/src/ui/page_system.cpp
 @@ -1,5 +1,7 @@
@@ -1890,7 +1890,7 @@ index 8a5d574..d497c24 100644
  #include "pages.h"
  #include "widgets.h"
  
-@@ -32,6 +34,39 @@ void DrawDiagnosticsPage(MenuContext& ctx)
+@@ -32,6 +34,87 @@ void DrawDiagnosticsPage(MenuContext& ctx)
              t.var.Relocate();
      ImGui::EndDisabled();
      ImGui::SetItemTooltip("重新扫一遍游戏内存，约一秒；正常不用点，位置变了会自动重找");
@@ -1925,7 +1925,55 @@ index 8a5d574..d497c24 100644
 +add('最接近100的全局: ' .. table.concat(s, ', '))
 +return table.concat(out, '\n')
 +)lua");
++    ImGui::SameLine();
++    if (ImGui::Button("扫描敌人名"))
++        ctx.pages.RunDiag(R"lua(
++local seen, out = {}, {}
++local function scan(t, d)
++  if type(t) ~= 'table' or d > 5 or seen[t] then return end
++  seen[t] = true
++  for k, v in pairs(t) do
++    if type(k) == 'string' and k:find('enemy.name.', 1, true) then
++      out[#out+1] = k .. ' = ' .. tostring(v)
++    elseif type(v) == 'table' then
++      scan(v, d + 1)
++    end
++  end
++end
++scan(_G, 0)
++for _, m in pairs(package.loaded) do scan(m, 0) end
++table.sort(out)
++if #out > 400 then while #out > 400 do table.remove(out) end end
++return #out .. ' 条\n' .. table.concat(out, '\n')
++)lua");
++    ImGui::SameLine();
++    if (ImGui::Button("扫描地图名"))
++        ctx.pages.RunDiag(R"lua(
++local seen, out = {}, {}
++local function scan(t, d)
++  if type(t) ~= 'table' or d > 5 or seen[t] then return end
++  seen[t] = true
++  for k, v in pairs(t) do
++    if type(k) == 'string' and (k:find('stage', 1, true) or k:find('map', 1, true))
++        and (type(v) == 'string' or type(v) == 'number') then
++      out[#out+1] = k .. ' = ' .. tostring(v)
++    elseif type(v) == 'table' then
++      scan(v, d + 1)
++    end
++  end
++end
++scan(_G, 0)
++for _, m in pairs(package.loaded) do scan(m, 0) end
++table.sort(out)
++if #out > 300 then while #out > 300 do table.remove(out) end end
++return #out .. ' 条\n' .. table.concat(out, '\n')
++)lua");
++
 +    ImGui::TextDisabled("结果：");
++    if (ImGui::SmallButton("复制结果"))
++        ImGui::SetClipboardText(ctx.pages.diagResult.c_str());
++    ImGui::SameLine();
++    ImGui::TextDisabled("%zu 字符", ctx.pages.diagResult.size());
 +    ImGui::TextWrapped("%s", ctx.pages.diagResult.empty() ? "（还没有执行）" : ctx.pages.diagResult.c_str());
  }
  
