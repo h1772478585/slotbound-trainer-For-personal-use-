@@ -1,28 +1,30 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index c29eed1..b86a999 100644
+index c29eed1..4afc056 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -34,6 +34,7 @@ set(APP_SOURCES
+@@ -34,6 +34,8 @@ set(APP_SOURCES
      src/game/items.cpp
      src/game/unitlevel.cpp
      src/game/slotctl.cpp
 +    src/game/unitcap.cpp
++    src/game/corectl.cpp
      src/ui/overlay.cpp
      src/ui/widgets.cpp
      src/ui/labels.cpp
-@@ -44,6 +45,7 @@ set(APP_SOURCES
+@@ -44,6 +46,8 @@ set(APP_SOURCES
      src/ui/unit_imprints.cpp
      src/ui/unit_awakening.cpp
      src/ui/page_items.cpp
 +    src/ui/page_unitcap.cpp
++    src/ui/page_core.cpp
      src/ui/page_slot.cpp
      src/ui/page_system.cpp
  )
 diff --git a/src/app/config.cpp b/src/app/config.cpp
-index 0d6be7a..20b042e 100644
+index 0d6be7a..bbd41cf 100644
 --- a/src/app/config.cpp
 +++ b/src/app/config.cpp
-@@ -102,6 +102,11 @@ bool LoadConfig(const std::wstring& path, Config& cfg)
+@@ -102,6 +102,17 @@ bool LoadConfig(const std::wstring& path, Config& cfg)
      if (cfg.slotSymbol.empty())
          cfg.slotSymbol = "A";
  
@@ -31,24 +33,33 @@ index 0d6be7a..20b042e 100644
 +    if (cfg.unitCap < 5)
 +        cfg.unitCap = 5;
 +
++    cfg.coreGuaranteed = ReadBool(path, L"core", L"guaranteed", cfg.coreGuaranteed);
++    const std::wstring coreId = ReadStr(path, L"core", L"force_id", L"");
++    cfg.coreForceId.clear();
++    for (wchar_t c : coreId) // 核心 id 是 ASCII 数字 / 字母
++        cfg.coreForceId += static_cast<char>(c);
++
      cfg.overlay = ReadBool(path, L"debug", L"overlay", cfg.overlay);
      return true;
  }
-@@ -122,6 +127,9 @@ bool SaveConfig(const std::wstring& path, const Config& cfg)
+@@ -122,6 +133,12 @@ bool SaveConfig(const std::wstring& path, const Config& cfg)
      WriteBool(path, L"slot", L"jackpot", cfg.slotJackpot);
      WriteStr(path, L"slot", L"symbol", std::wstring(cfg.slotSymbol.begin(), cfg.slotSymbol.end()));
  
 +    WriteBool(path, L"unitcap", L"enabled", cfg.unitCapEnabled);
 +    WriteInt(path, L"unitcap", L"cap", cfg.unitCap);
 +
++    WriteBool(path, L"core", L"guaranteed", cfg.coreGuaranteed);
++    WriteStr(path, L"core", L"force_id", std::wstring(cfg.coreForceId.begin(), cfg.coreForceId.end()));
++
      WriteBool(path, L"debug", L"overlay", cfg.overlay);
  
      // WritePrivateProfileString 有缓存，传全空参数强制落盘
 diff --git a/src/app/config.h b/src/app/config.h
-index 5fa58a0..df8c537 100644
+index 5fa58a0..0be2f6e 100644
 --- a/src/app/config.h
 +++ b/src/app/config.h
-@@ -34,6 +34,10 @@ struct Config {
+@@ -34,6 +34,14 @@ struct Config {
      bool slotJackpot = false;        // 大奖模式：每次转都是 9 格同一兵种
      std::string slotSymbol = "A";    // W A S M H D、J（小丑），或 random = 每次随机一种普通兵种
  
@@ -56,9 +67,302 @@ index 5fa58a0..df8c537 100644
 +    bool unitCapEnabled = false;  // 打开后把游戏的上限改成 unitCap
 +    int unitCap = 999;            // 想要的人数上限，最小 5
 +
++    // [core]  核心（经 Lua 桥，需要注入）
++    bool coreGuaranteed = false;  // 核心必出：让指定核心出现在候选第 1 位
++    std::string coreForceId;      // 指定的核心 id（对应 cores.getById），空 = 不指定
++
      // [debug]
      bool overlay = true; // 左上角状态栏
  
+diff --git a/src/game/corectl.cpp b/src/game/corectl.cpp
+new file mode 100644
+index 0000000..8d5900b
+--- /dev/null
++++ b/src/game/corectl.cpp
+@@ -0,0 +1,217 @@
++#include "corectl.h"
++
++#include <windows.h>
++
++#include <cstdlib>
++
++#include "luaops.h"
++
++namespace {
++
++using namespace luaops;
++
++// 核心目录：id<TAB>中文名<TAB>稀有度<TAB>key，一行一个
++constexpr const char* kCatalogLua = R"lua(
++local C = package.loaded['src.game.cores'] or require('src.game.cores')
++if type(C) ~= 'table' or type(C.getIds) ~= 'function' or type(C.getById) ~= 'function' then return '' end
++local L = package.loaded['src.data.language'] or require('src.data.language')
++local out = {}
++for _, id in ipairs(C.getIds()) do
++  local d = C.getById(id)
++  if type(d) == 'table' then
++    local zh = tostring(d.name or '')
++    if type(L) == 'table' and type(L.getCoreName) == 'function' then
++      local ok, n = pcall(L.getCoreName, d.key, d.name, 'zh')
++      if ok and n and n ~= '' then zh = tostring(n) end
++    end
++    out[#out+1] = tostring(id) .. '\t' .. zh .. '\t' .. tostring(d.rarity or '') .. '\t' .. tostring(d.key or '')
++  end
++end
++return table.concat(out, '\n')
++)lua";
++
++// 核心必出：包装 cores.offer（初次打开和 reroll 都走它），关掉时原样透传。
++// 回：状态  已塞入次数  核心选择页是否开着
++constexpr const char* kSyncLua = R"lua(
++local cfg = rawget(_G, '__sbCoreCfg')
++if type(cfg) ~= 'table' then cfg = {}; rawset(_G, '__sbCoreCfg', cfg) end
++cfg.forceId = FORCE_ID
++local C = package.loaded['src.game.cores'] or require('src.game.cores')
++if type(C) ~= 'table' or type(C.offer) ~= 'function' then return 'nocores\t0\t0' end
++local W = rawget(_G, '__sbCoreWrapped')
++if type(W) ~= 'table' then W = setmetatable({}, { __mode = 'k' }); rawset(_G, '__sbCoreWrapped', W) end
++if not W[C.offer] then
++  local orig = C.offer
++  local function w(...)
++    local r = orig(...) or {}
++    local want = cfg.forceId
++    if type(r) == 'table' and want and want ~= '' and type(C.getById) == 'function' then
++      local def = C.getById(want)
++      if type(def) == 'table' then
++        r[1] = def
++        for i = 2, 3 do
++          if type(r[i]) == 'table' and r[i].id == def.id then r[i] = nil end
++        end
++        cfg.hits = (cfg.hits or 0) + 1
++      end
++    end
++    return r
++  end
++  W[w] = true
++  C.offer = w
++  rawset(_G, '__sbCoreOrigOffer', orig)
++end
++local ui = rawget(_G, 'ui')
++local open = type(ui) == 'table' and type(ui._coreSelect) == 'table' and ui._coreSelect.active or false
++return 'ok\t' .. tostring(cfg.hits or 0) .. '\t' .. (open and '1' or '0')
++)lua";
++
++// 强制打开核心选择页。必须带 fromCountdown=true，否则 render.lua 会立刻把弹窗清掉。
++constexpr const char* kOpenLua = R"lua(
++local ui = rawget(_G, 'ui')
++if type(ui) ~= 'table' then return 'no-ui' end
++if type(ui._coreSelect) == 'table' and ui._coreSelect.active then return 'already' end
++local C = package.loaded['src.game.cores'] or require('src.game.cores')
++if type(C) ~= 'table' or type(C.offer) ~= 'function' then return 'no-cores' end
++local order = (tonumber(rawget(_G, 'coreSelectionsMade')) or 0) + 1
++local ok, o = pcall(C.offer, 3, order, nil)
++if not ok or type(o) ~= 'table' then return 'no-offers' end
++local list = { o[1], o[2], o[3] }
++if not (list[1] or list[2] or list[3]) then return 'no-offers' end
++rawset(_G, '__sbCoreForceBackup', {
++  cs = ui._coreSelect, cache = ui._coreSelectOffersCache, deferred = ui._deferredCoreSelect
++})
++ui._coreSelect = {
++  active = true,
++  startT = (type(love) == 'table' and type(love.timer) == 'table' and type(love.timer.getTime) == 'function') and love.timer.getTime() or 0,
++  offers = list,
++  fromCountdown = true,
++  rerollCost = 0,
++  _paidRerollCost = ui._coreSelectRerollCost or 1,
++  _usesUpgradeFreeReroll = false,
++}
++return 'ok'
++)lua";
++
++// 关掉刚才强制打开的页面，还原原来的状态（包括用户原本可能开着的详情窗）
++constexpr const char* kCloseLua = R"lua(
++local ui = rawget(_G, 'ui')
++if type(ui) ~= 'table' then return 'no-ui' end
++local b = rawget(_G, '__sbCoreForceBackup')
++ui._coreSelect = b and b.cs or nil
++ui._coreSelectOffersCache = b and b.cache or nil
++ui._deferredCoreSelect = b and b.deferred or nil
++ui._coreSelectReturnHover = nil
++ui._coreJokerTooltipState = nil
++rawset(_G, '__sbCoreForceBackup', nil)
++return 'ok'
++)lua";
++
++} // namespace
++
++const CoreDef* CoreControl::Find(const std::string& id) const
++{
++    for (const CoreDef& d : catalog_)
++        if (d.id == id)
++            return &d;
++    return nullptr;
++}
++
++void CoreControl::OnAction(const bridge::Result& r)
++{
++    if (!r.ok) {
++        error_ = "失败：" + r.text;
++        message_.clear();
++        return;
++    }
++    error_.clear();
++    if (r.text == "ok")
++        message_ = pendingAction_ == "close" ? "已关闭核心选择页" : "已打开核心选择页";
++    else if (r.text == "already")
++        message_ = "核心选择页已经开着";
++    else if (r.text == "no-ui")
++        error_ = "失败：还没连上游戏界面";
++    else if (r.text == "no-cores")
++        error_ = "失败：找不到核心模块（版本不对？）";
++    else if (r.text == "no-offers")
++        error_ = "失败：游戏没生成核心候选";
++    else
++        message_ = r.text;
++}
++
++void CoreControl::Update(bool injected, bool enabled, const std::string& forceId)
++{
++    if (Ready(catalogJob_)) {
++        const bridge::Result r = catalogJob_.get();
++        if (r.ok && !r.text.empty()) {
++            catalog_.clear();
++            for (const std::string& line : Split(r.text, '\n')) {
++                const auto f = Split(line, '\t');
++                if (f.empty() || f[0].empty())
++                    continue;
++                CoreDef d;
++                d.id = f[0];
++                d.name = f.size() > 1 ? f[1] : f[0];
++                d.rarity = f.size() > 2 ? f[2] : std::string();
++                d.key = f.size() > 3 ? f[3] : std::string();
++                catalog_.push_back(std::move(d));
++            }
++            catalogLoaded_ = !catalog_.empty();
++        }
++    }
++    if (Ready(syncJob_)) {
++        const bridge::Result r = syncJob_.get();
++        if (!r.ok) {
++            error_ = r.text;
++            hooked_ = false;
++        } else {
++            const auto f = Split(r.text, '\t');
++            hooked_ = f[0] == "ok";
++            hits_ = f.size() > 1 ? atoi(f[1].c_str()) : 0;
++            pageOpen_ = f.size() > 2 && f[2] == "1";
++            if (!hooked_)
++                error_ = "没找到 src.game.cores.offer（版本不对？）";
++            else
++                error_.clear();
++        }
++    }
++    if (Ready(actionJob_))
++        OnAction(actionJob_.get());
++
++    if (!injected) {
++        hooked_ = false;
++        pageOpen_ = false;
++        return;
++    }
++    const ULONGLONG now = GetTickCount64();
++    if (!catalogLoaded_ && !catalogJob_.valid() && now - lastCatalogTry_ >= 2000) {
++        lastCatalogTry_ = now;
++        catalogJob_ = Run(kCatalogLua);
++    }
++    const bool changed = enabled != sentEnabled_ || forceId != sentForceId_;
++    if (syncJob_.valid() || (!changed && now - lastSync_ < 1000))
++        return;
++    lastSync_ = now;
++    sentEnabled_ = enabled;
++    sentForceId_ = forceId;
++    const std::string prefix = "local FORCE_ID = " + (forceId.empty() ? "nil" : Quote(forceId)) + "\n";
++    syncJob_ = Run(prefix + kSyncLua);
++}
++
++void CoreControl::OpenPage()
++{
++    if (actionJob_.valid())
++        return;
++    message_.clear();
++    pendingAction_ = "open";
++    actionJob_ = Run(kOpenLua);
++}
++
++void CoreControl::ClosePage()
++{
++    if (actionJob_.valid())
++        return;
++    message_.clear();
++    pendingAction_ = "close";
++    actionJob_ = Run(kCloseLua);
++}
+diff --git a/src/game/corectl.h b/src/game/corectl.h
+new file mode 100644
+index 0000000..ea43050
+--- /dev/null
++++ b/src/game/corectl.h
+@@ -0,0 +1,60 @@
++#pragma once
++
++#include <future>
++#include <string>
++#include <vector>
++
++#include "bridge/luaclient.h"
++
++// 核心目录里的一项：id 是 getById 认的字符串编号，name 是中文名
++struct CoreDef {
++    std::string id;
++    std::string name;
++    std::string rarity;
++    std::string key;
++};
++
++// 核心控制：经 Lua 桥做两件事
++//   1) 强制核心选择页：直接构造 _G.ui._coreSelect，让游戏弹核心选择窗（一次性动作，不是常驻 hook）
++//   2) 核心必出：包住 package.loaded['src.game.cores'].offer，把指定核心放到第 1 个候选；
++//      关掉时包装原样透传，游戏自己重新 require 时每秒自检会重新包上
++class CoreControl {
++public:
++    // 每帧调用。injected = Lua 桥可用；enabled / forceId 是当前「核心必出」设置
++    void Update(bool injected, bool enabled, const std::string& forceId);
++
++    void OpenPage();  // 强制打开核心选择页（一次性）
++    void ClosePage(); // 关掉刚才强制打开的页面并还原原状态
++
++    bool CatalogLoaded() const { return catalogLoaded_; }
++    const std::vector<CoreDef>& Catalog() const { return catalog_; }
++    const CoreDef* Find(const std::string& id) const;
++
++    bool Busy() const { return actionJob_.valid(); }
++    bool Hooked() const { return hooked_; }
++    int Hits() const { return hits_; }        // 本次游戏里「指定核心」被塞进候选的次数
++    bool PageOpen() const { return pageOpen_; }
++    const std::string& Error() const { return error_; }
++    const std::string& Message() const { return message_; }
++
++private:
++    void OnAction(const bridge::Result& r);
++
++    std::future<bridge::Result> catalogJob_;
++    std::future<bridge::Result> syncJob_;
++    std::future<bridge::Result> actionJob_;
++
++    unsigned long long lastCatalogTry_ = 0;
++    unsigned long long lastSync_ = 0;
++    bool sentEnabled_ = false;
++    std::string sentForceId_;
++
++    bool catalogLoaded_ = false;
++    bool hooked_ = false;
++    bool pageOpen_ = false;
++    int hits_ = 0;
++    std::vector<CoreDef> catalog_;
++    std::string error_;
++    std::string message_;
++    std::string pendingAction_; // "open" / "close"，用来把回执翻成中文
++};
 diff --git a/src/game/unitcap.cpp b/src/game/unitcap.cpp
 new file mode 100644
 index 0000000..824df13
@@ -200,33 +504,40 @@ index 0000000..71130a7
 +    std::string error_;
 +};
 diff --git a/src/ui/menu.cpp b/src/ui/menu.cpp
-index 8934656..dcd3941 100644
+index 8934656..a78e8f5 100644
 --- a/src/ui/menu.cpp
 +++ b/src/ui/menu.cpp
-@@ -16,8 +16,9 @@ void LuaPages::Update(bool menuOpen, bool injected, const Config& cfg)
+@@ -16,8 +16,10 @@ void LuaPages::Update(bool menuOpen, bool injected, const Config& cfg)
      imprints.Update(ready && shown.unit && shown.imprints);
      awakening.Update(ready && shown.unit && shown.awakening);
      items.Update(ready && shown.items);
 -    // 老虎机控制不管菜单开没开都要保持（每秒检查包装还在不在）
-+    // 老虎机 / 人数上限不管菜单开没开都要保持（每秒检查包装还在不在）
++    // 老虎机 / 人数上限 / 核心必出不管菜单开没开都要保持（每秒检查包装还在不在）
      slot.Update(injected, cfg.enabled && cfg.slotJackpot, cfg.slotSymbol);
 +    unitCap.Update(injected, cfg.enabled && cfg.unitCapEnabled, cfg.unitCap);
++    core.Update(injected, cfg.enabled && cfg.coreGuaranteed, cfg.coreForceId);
  }
  
  bool DrawMenu(MenuContext& ctx)
-@@ -38,6 +39,7 @@ bool DrawMenu(MenuContext& ctx)
+@@ -38,6 +40,8 @@ bool DrawMenu(MenuContext& ctx)
      static const Tab kTabs[] = {
          { "资源", [](MenuContext& c) { DrawResourcesPage(c.cfg, c.vars); } },
          { "单位", DrawUnitPage },
 +        { "人数上限", DrawUnitCapPage },
++        { "核心", DrawCorePage },
          { "物品", DrawItemsPage },
          { "老虎机", DrawSlotPage },
          { "诊断", DrawDiagnosticsPage },
 diff --git a/src/ui/menu.h b/src/ui/menu.h
-index 1e10acd..a43d016 100644
+index 1e10acd..c3818d8 100644
 --- a/src/ui/menu.h
 +++ b/src/ui/menu.h
-@@ -15,6 +15,7 @@
+@@ -11,10 +11,12 @@
+ #include "core/luavar.h"
+ #include "core/process.h"
+ #include "game/awakening.h"
++#include "game/corectl.h"
+ #include "game/imprints.h"
  #include "game/items.h"
  #include "game/options.h"
  #include "game/slotctl.h"
@@ -234,25 +545,130 @@ index 1e10acd..a43d016 100644
  #include "game/unitlevel.h"
  
  namespace ui {
-@@ -80,6 +81,7 @@ struct ItemsUi {
+@@ -80,6 +82,8 @@ struct ItemsUi {
  struct LuaPages {
      std::string injectError;
      SlotControl slot;
 +    UnitCapControl unitCap;
++    CoreControl core;
      UnitLevelEditor unit;
      OptionEditor options;
      ImprintEditor imprints;
-@@ -94,7 +96,7 @@ struct LuaPages {
+@@ -94,7 +98,7 @@ struct LuaPages {
  
      // 这一帧画了哪几页（画菜单前清零）：只给看得见的页刷新数据
      struct Shown {
 -        bool unit = false, options = false, imprints = false, awakening = false, items = false;
-+        bool unit = false, options = false, imprints = false, awakening = false, items = false, unitcap = false;
++        bool unit = false, options = false, imprints = false, awakening = false, items = false, unitcap = false, core = false;
      } shown;
  
      // 每帧画菜单之前调用。menuOpen / injected 决定要不要去游戏里读数据
+diff --git a/src/ui/page_core.cpp b/src/ui/page_core.cpp
+new file mode 100644
+index 0000000..ec4436f
+--- /dev/null
++++ b/src/ui/page_core.cpp
+@@ -0,0 +1,98 @@
++// 「核心」页：强制打开核心选择页 + 核心必出
++
++#include <string>
++
++#include "pages.h"
++#include "widgets.h"
++
++namespace ui {
++
++namespace {
++
++void DrawCorePicker(Config& cfg, const CoreControl& core)
++{
++    const float scale = Scale();
++    const auto& list = core.Catalog();
++    if (list.empty()) {
++        ImGui::TextDisabled("正在读核心表…");
++        return;
++    }
++
++    int current = -1;
++    for (size_t i = 0; i < list.size(); ++i) {
++        if (list[i].id == cfg.coreForceId) {
++            current = static_cast<int>(i);
++            break;
++        }
++    }
++    if (current < 0) {
++        cfg.coreForceId = list[0].id;
++        current = 0;
++    }
++
++    const CoreDef& picked = list[current];
++    const std::string preview = picked.name + "（" + picked.id + " · " + picked.rarity + "）";
++    ImGui::SetNextItemWidth(320.0f * scale);
++    if (ImGui::BeginCombo("##forcecore", preview.c_str())) {
++        for (const CoreDef& d : list) {
++            const bool selected = d.id == cfg.coreForceId;
++            const std::string label = d.name + "（" + d.id + " · " + d.rarity + "）";
++            if (ImGui::Selectable(label.c_str(), selected))
++                cfg.coreForceId = d.id;
++            if (selected)
++                ImGui::SetItemDefaultFocus();
++        }
++        ImGui::EndCombo();
++    }
++}
++
++} // namespace
++
++void DrawCorePage(MenuContext& ctx)
++{
++    if (!DrawBridgeBar(ctx, "核心"))
++        return;
++    ctx.pages.shown.core = true;
++
++    CoreControl& core = ctx.pages.core;
++    ErrorText(core.Error());
++    HintText(core.Message());
++
++    SectionTitle("强制核心选择页");
++    ImGui::TextDisabled("不用等游戏给机会，直接打开核心选择界面；选完就关，不会反复弹。");
++    ImGui::BeginDisabled(core.Busy());
++    if (ImGui::Button("打开核心选择页"))
++        core.OpenPage();
++    ImGui::SameLine();
++    if (ImGui::Button("关闭页面"))
++        core.ClosePage();
++    ImGui::EndDisabled();
++    if (core.PageOpen())
++        ImGui::TextColored(kGreen, "核心选择页正在显示");
++    else
++        ImGui::TextDisabled("核心选择页：未显示");
++
++    SectionTitle("核心必出");
++    ToggleSwitch("指定核心必出", &ctx.cfg.coreGuaranteed,
++                 "下次进入核心选择时，指定核心会出现在第 1 个候选；仍要自己点选确认");
++    DrawCorePicker(ctx.cfg, core);
++
++    if (!core.Hooked()) {
++        ImGui::TextDisabled("正在连接游戏的核心模块…（进一局后再看）");
++    } else if (!ctx.cfg.enabled) {
++        ImGui::TextColored(kAmber, "总开关是关的：核心必出不生效");
++    } else if (ctx.cfg.coreGuaranteed) {
++        const CoreDef* d = core.Find(ctx.cfg.coreForceId);
++        ImGui::TextColored(kGreen, "已生效：下次核心候选第 1 张必为 %s（本次已塞入 %d 次）",
++                           d ? d->name.c_str() : ctx.cfg.coreForceId.c_str(), core.Hits());
++    } else {
++        ImGui::TextDisabled("关闭中：核心候选和原版一样（本次已塞入 %d 次）", core.Hits());
++    }
++
++    ImGui::Spacing();
++    ImGui::TextWrapped("原理：包装 src.game.cores.offer，把选中的核心放到候选第 1 位；"
++                       "强制页则直接构造 ui._coreSelect。两者独立，不改存档、不动游戏文件，"
++                       "关掉或修改器没开时都是原版行为。核心名从游戏内读取，版本不同可能读不到。");
++}
++
++} // namespace ui
 diff --git a/src/ui/page_unit.cpp b/src/ui/page_unit.cpp
-index d8422dd..3c1112d 100644
+index d8422dd..bdaeb5f 100644
 --- a/src/ui/page_unit.cpp
 +++ b/src/ui/page_unit.cpp
 @@ -304,7 +304,7 @@ bool DrawBridgeBar(const MenuContext& ctx, const char* feature)
@@ -260,7 +676,7 @@ index d8422dd..3c1112d 100644
          ImGui::TextWrapped("改%s要在游戏里执行 Lua，需要先把 slotbound_lua.dll 注入游戏。"
                             "它只改 love.dll 导入表里的一个函数指针，不改游戏文件，点「卸载注入」或游戏退出就没了。", feature);
 -        if (ImGui::Button("注入（启用单位 / 物品 / 老虎机功能）")) {
-+        if (ImGui::Button("注入（启用单位 / 物品 / 老虎机 / 人数上限功能）")) {
++        if (ImGui::Button("注入（启用单位 / 物品 / 老虎机 / 人数上限 / 核心功能）")) {
              injectError.clear();
              // DLL 内嵌在修改器 exe 里，先释放到 %LOCALAPPDATA%\slotbound-trainer\ 再注入
              const std::wstring dll = bridge::ExtractEmbeddedDll(injectError);
@@ -327,22 +743,24 @@ index 0000000..bd41d2f
 +
 +} // namespace ui
 diff --git a/src/ui/pages.h b/src/ui/pages.h
-index ff1017e..fb3f9da 100644
+index ff1017e..3637ffd 100644
 --- a/src/ui/pages.h
 +++ b/src/ui/pages.h
-@@ -4,6 +4,7 @@
+@@ -4,6 +4,8 @@
  //   page_resources.cpp  资源（金币 / 旋转 / 水晶）+ 状态栏
  //   page_unit.cpp       单位：等级、属性、技能；下挂 unit_options / unit_imprints / unit_awakening 三个子页
  //   page_items.cpp      物品
 +//   page_unitcap.cpp    人数上限
++//   page_core.cpp       核心：强制选择页 / 核心必出
  //   page_slot.cpp       老虎机
  //   page_system.cpp     诊断、设置
  
-@@ -26,6 +27,7 @@ void DrawImprintsBody(ImprintEditor& editor, ImprintsUi& ui);
+@@ -26,6 +28,8 @@ void DrawImprintsBody(ImprintEditor& editor, ImprintsUi& ui);
  void DrawAwakeningBody(AwakeningEditor& editor, AwakeningUi& ui);
  
  void DrawItemsPage(MenuContext& ctx);
 +void DrawUnitCapPage(MenuContext& ctx);
++void DrawCorePage(MenuContext& ctx);
  void DrawSlotPage(MenuContext& ctx);
  void DrawDiagnosticsPage(MenuContext& ctx);
  void DrawSettingsPage(MenuContext& ctx);
