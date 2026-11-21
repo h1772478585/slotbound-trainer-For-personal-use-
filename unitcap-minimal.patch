@@ -1,0 +1,348 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c29eed1..b86a999 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -34,6 +34,7 @@ set(APP_SOURCES
+     src/game/items.cpp
+     src/game/unitlevel.cpp
+     src/game/slotctl.cpp
++    src/game/unitcap.cpp
+     src/ui/overlay.cpp
+     src/ui/widgets.cpp
+     src/ui/labels.cpp
+@@ -44,6 +45,7 @@ set(APP_SOURCES
+     src/ui/unit_imprints.cpp
+     src/ui/unit_awakening.cpp
+     src/ui/page_items.cpp
++    src/ui/page_unitcap.cpp
+     src/ui/page_slot.cpp
+     src/ui/page_system.cpp
+ )
+diff --git a/src/app/config.cpp b/src/app/config.cpp
+index 0d6be7a..20b042e 100644
+--- a/src/app/config.cpp
++++ b/src/app/config.cpp
+@@ -102,6 +102,11 @@ bool LoadConfig(const std::wstring& path, Config& cfg)
+     if (cfg.slotSymbol.empty())
+         cfg.slotSymbol = "A";
+ 
++    cfg.unitCapEnabled = ReadBool(path, L"unitcap", L"enabled", cfg.unitCapEnabled);
++    cfg.unitCap = ReadInt(path, L"unitcap", L"cap", cfg.unitCap);
++    if (cfg.unitCap < 5)
++        cfg.unitCap = 5;
++
+     cfg.overlay = ReadBool(path, L"debug", L"overlay", cfg.overlay);
+     return true;
+ }
+@@ -122,6 +127,9 @@ bool SaveConfig(const std::wstring& path, const Config& cfg)
+     WriteBool(path, L"slot", L"jackpot", cfg.slotJackpot);
+     WriteStr(path, L"slot", L"symbol", std::wstring(cfg.slotSymbol.begin(), cfg.slotSymbol.end()));
+ 
++    WriteBool(path, L"unitcap", L"enabled", cfg.unitCapEnabled);
++    WriteInt(path, L"unitcap", L"cap", cfg.unitCap);
++
+     WriteBool(path, L"debug", L"overlay", cfg.overlay);
+ 
+     // WritePrivateProfileString 有缓存，传全空参数强制落盘
+diff --git a/src/app/config.h b/src/app/config.h
+index 5fa58a0..df8c537 100644
+--- a/src/app/config.h
++++ b/src/app/config.h
+@@ -34,6 +34,10 @@ struct Config {
+     bool slotJackpot = false;        // 大奖模式：每次转都是 9 格同一兵种
+     std::string slotSymbol = "A";    // W A S M H D、J（小丑），或 random = 每次随机一种普通兵种
+ 
++    // [unitcap]  人数上限（经 Lua 桥，需要注入）
++    bool unitCapEnabled = false;  // 打开后把游戏的上限改成 unitCap
++    int unitCap = 999;            // 想要的人数上限，最小 5
++
+     // [debug]
+     bool overlay = true; // 左上角状态栏
+ 
+diff --git a/src/game/unitcap.cpp b/src/game/unitcap.cpp
+new file mode 100644
+index 0000000..824df13
+--- /dev/null
++++ b/src/game/unitcap.cpp
+@@ -0,0 +1,94 @@
++#include "unitcap.h"
++
++#include <windows.h>
++
++#include <cstdlib>
++
++#include "luaops.h"
++
++namespace {
++
++using namespace luaops;
++
++// 装包装（已装就跳过）+ 写设置，回：状态  生效上限  当前人数  原版上限
++// 游戏里的公式是 5 + require('src.ui.upgrade').getMaxUnitBonus()；包装只改这个返回值。
++// 用 rawget/rawset 碰 _G，跟游戏和修改器其它 hook 的写法保持一致。
++constexpr const char* kSyncLua = R"lua(
++local function getModule()
++  for _, name in ipairs({ 'src.ui.upgrade', 'src.game.upgrade' }) do
++    local m = package.loaded[name]
++    if type(m) == 'table' and type(m.getMaxUnitBonus) == 'function' then return m end
++  end
++  local ok, m = pcall(require, 'src.ui.upgrade')
++  if ok and type(m) == 'table' and type(m.getMaxUnitBonus) == 'function' then return m end
++  return nil
++end
++local U = getModule()
++if not U then return 'no_module\t0\t-1\t0' end
++local H = rawget(_G, '__sbUnitCapHook')
++local cur = U.getMaxUnitBonus
++if type(H) ~= 'table' or H.wrapper ~= cur or H.module ~= U then
++  local orig = cur
++  H = { orig = orig, module = U }
++  H.wrapper = function(...)
++    local c = rawget(_G, '__sbUnitCapCfg')
++    if c and c.enabled then
++      local n = tonumber(c.cap)
++      if n and n >= 5 then return math.max(0, math.floor(n) - 5) end
++    end
++    return orig(...)
++  end
++  U.getMaxUnitBonus = H.wrapper
++  rawset(_G, '__sbUnitCapHook', H)
++end
++local c = rawget(_G, '__sbUnitCapCfg')
++if type(c) ~= 'table' then c = {}; rawset(_G, '__sbUnitCapCfg', c) end
++c.enabled = ENABLED
++c.cap = CAP
++local bf = rawget(_G, 'battlefield')
++local count = -1
++if type(bf) == 'table' and type(bf.getOwnedUnitCount) == 'function' then
++  local ok2, n = pcall(bf.getOwnedUnitCount, bf)
++  if ok2 then count = math.max(0, math.floor(tonumber(n) or 0)) end
++end
++local ok3, bonus = pcall(H.orig)
++if not ok3 then bonus = 0 end
++local origCap = 5 + math.max(0, math.floor(tonumber(bonus) or 0))
++local eff = c.enabled and math.max(5, math.floor(tonumber(c.cap) or 5)) or origCap
++return 'ok\t' .. tostring(eff) .. '\t' .. tostring(count) .. '\t' .. tostring(origCap)
++)lua";
++
++} // namespace
++
++void UnitCapControl::Update(bool injected, bool enabled, int cap)
++{
++    if (Ready(job_)) {
++        const bridge::Result r = job_.get();
++        if (!r.ok) {
++            error_ = r.text;
++            hooked_ = false;
++        } else {
++            const auto f = Split(r.text, '\t');
++            hooked_ = f[0] == "ok";
++            effectiveCap_ = f.size() > 1 ? atoi(f[1].c_str()) : 0;
++            unitCount_ = f.size() > 2 ? atoi(f[2].c_str()) : -1;
++            originalCap_ = f.size() > 3 ? atoi(f[3].c_str()) : 0;
++            error_ = hooked_ ? std::string() : "没找到游戏的 getMaxUnitBonus（版本不对？）";
++        }
++    }
++    if (!injected) {
++        hooked_ = false;
++        return;
++    }
++    // 设置变了马上同步；否则每秒一次（检查包装还在不在、读当前人数）
++    const ULONGLONG now = GetTickCount64();
++    const bool changed = enabled != sentEnabled_ || cap != sentCap_;
++    if (job_.valid() || (!changed && now - lastSync_ < 1000))
++        return;
++    lastSync_ = now;
++    sentEnabled_ = enabled;
++    sentCap_ = cap;
++    std::string code = "local ENABLED, CAP = " + std::string(enabled ? "true" : "false") + ", " +
++        Number(static_cast<double>(cap)) + "\n" + kSyncLua;
++    job_ = Run(std::move(code));
++}
+diff --git a/src/game/unitcap.h b/src/game/unitcap.h
+new file mode 100644
+index 0000000..71130a7
+--- /dev/null
++++ b/src/game/unitcap.h
+@@ -0,0 +1,34 @@
++#pragma once
++
++#include <future>
++#include <string>
++
++#include "bridge/luaclient.h"
++
++// 人数上限（指挥上限）控制：经 Lua 桥包住游戏的 src.ui.upgrade.getMaxUnitBonus。
++//
++// 游戏源码里的上限算法是 5 + getMaxUnitBonus()，升级树的指挥 I/II/III 让它变成 6/7/8。
++// 包装后按修改器设置的「上限 N」返回 N-5，于是上限就变成 N；关掉或修改器没注入时原样透传，
++// 游戏升级树和存档都不动。每秒检查一次包装还在不在（换局、重新注入都能恢复）。
++class UnitCapControl {
++public:
++    // 每帧调用。injected = Lua 桥可用；enabled / cap 是当前设置（总开关关时 enabled 为 false）
++    void Update(bool injected, bool enabled, int cap);
++
++    bool Hooked() const { return hooked_; }             // 找到游戏函数并装好包装
++    int EffectiveCap() const { return effectiveCap_; }  // 游戏当前实际用的上限
++    int OriginalCap() const { return originalCap_; }    // 不改时的上限（5 + 升级树加成）
++    int UnitCount() const { return unitCount_; }        // 当前己方单位数；-1 = 还没读到
++    const std::string& Error() const { return error_; }
++
++private:
++    std::future<bridge::Result> job_;
++    unsigned long long lastSync_ = 0;
++    bool sentEnabled_ = false;
++    int sentCap_ = 0;
++    bool hooked_ = false;
++    int effectiveCap_ = 0;
++    int originalCap_ = 0;
++    int unitCount_ = -1;
++    std::string error_;
++};
+diff --git a/src/ui/menu.cpp b/src/ui/menu.cpp
+index 8934656..dcd3941 100644
+--- a/src/ui/menu.cpp
++++ b/src/ui/menu.cpp
+@@ -16,8 +16,9 @@ void LuaPages::Update(bool menuOpen, bool injected, const Config& cfg)
+     imprints.Update(ready && shown.unit && shown.imprints);
+     awakening.Update(ready && shown.unit && shown.awakening);
+     items.Update(ready && shown.items);
+-    // 老虎机控制不管菜单开没开都要保持（每秒检查包装还在不在）
++    // 老虎机 / 人数上限不管菜单开没开都要保持（每秒检查包装还在不在）
+     slot.Update(injected, cfg.enabled && cfg.slotJackpot, cfg.slotSymbol);
++    unitCap.Update(injected, cfg.enabled && cfg.unitCapEnabled, cfg.unitCap);
+ }
+ 
+ bool DrawMenu(MenuContext& ctx)
+@@ -38,6 +39,7 @@ bool DrawMenu(MenuContext& ctx)
+     static const Tab kTabs[] = {
+         { "资源", [](MenuContext& c) { DrawResourcesPage(c.cfg, c.vars); } },
+         { "单位", DrawUnitPage },
++        { "人数上限", DrawUnitCapPage },
+         { "物品", DrawItemsPage },
+         { "老虎机", DrawSlotPage },
+         { "诊断", DrawDiagnosticsPage },
+diff --git a/src/ui/menu.h b/src/ui/menu.h
+index 1e10acd..a43d016 100644
+--- a/src/ui/menu.h
++++ b/src/ui/menu.h
+@@ -15,6 +15,7 @@
+ #include "game/items.h"
+ #include "game/options.h"
+ #include "game/slotctl.h"
++#include "game/unitcap.h"
+ #include "game/unitlevel.h"
+ 
+ namespace ui {
+@@ -80,6 +81,7 @@ struct ItemsUi {
+ struct LuaPages {
+     std::string injectError;
+     SlotControl slot;
++    UnitCapControl unitCap;
+     UnitLevelEditor unit;
+     OptionEditor options;
+     ImprintEditor imprints;
+@@ -94,7 +96,7 @@ struct LuaPages {
+ 
+     // 这一帧画了哪几页（画菜单前清零）：只给看得见的页刷新数据
+     struct Shown {
+-        bool unit = false, options = false, imprints = false, awakening = false, items = false;
++        bool unit = false, options = false, imprints = false, awakening = false, items = false, unitcap = false;
+     } shown;
+ 
+     // 每帧画菜单之前调用。menuOpen / injected 决定要不要去游戏里读数据
+diff --git a/src/ui/page_unit.cpp b/src/ui/page_unit.cpp
+index d8422dd..3c1112d 100644
+--- a/src/ui/page_unit.cpp
++++ b/src/ui/page_unit.cpp
+@@ -304,7 +304,7 @@ bool DrawBridgeBar(const MenuContext& ctx, const char* feature)
+     if (!ctx.injected) {
+         ImGui::TextWrapped("改%s要在游戏里执行 Lua，需要先把 slotbound_lua.dll 注入游戏。"
+                            "它只改 love.dll 导入表里的一个函数指针，不改游戏文件，点「卸载注入」或游戏退出就没了。", feature);
+-        if (ImGui::Button("注入（启用单位 / 物品 / 老虎机功能）")) {
++        if (ImGui::Button("注入（启用单位 / 物品 / 老虎机 / 人数上限功能）")) {
+             injectError.clear();
+             // DLL 内嵌在修改器 exe 里，先释放到 %LOCALAPPDATA%\slotbound-trainer\ 再注入
+             const std::wstring dll = bridge::ExtractEmbeddedDll(injectError);
+diff --git a/src/ui/page_unitcap.cpp b/src/ui/page_unitcap.cpp
+new file mode 100644
+index 0000000..bd41d2f
+--- /dev/null
++++ b/src/ui/page_unitcap.cpp
+@@ -0,0 +1,56 @@
++// 「人数上限」页：把游戏的指挥上限 5 + getMaxUnitBonus() 改成想要的值
++
++#include <algorithm>
++
++#include "pages.h"
++#include "widgets.h"
++
++namespace ui {
++
++void DrawUnitCapPage(MenuContext& ctx)
++{
++    if (!DrawBridgeBar(ctx, "人数上限"))
++        return;
++    ctx.pages.shown.unitcap = true;
++
++    const UnitCapControl& cap = ctx.pages.unitCap;
++    ErrorText(cap.Error());
++
++    SectionTitle("队伍人数上限");
++    ToggleSwitch("启用人数上限", &ctx.cfg.unitCapEnabled,
++                 "打开后游戏的队伍容量会变成下面填的数；关掉立刻恢复原版上限");
++    ImGui::TextDisabled("上限人数（最小 5；填太大可能影响帧率）");
++    ImGui::SameLine();
++    ImGui::SetNextItemWidth(130.0f * Scale());
++    ImGui::InputInt("##unitcap", &ctx.cfg.unitCap, 1, 10);
++    ctx.cfg.unitCap = std::max(5, std::min(999, ctx.cfg.unitCap));
++
++    ImGui::TextDisabled("常用：");
++    static const int kPresets[] = { 5, 6, 8, 12, 20, 99, 999 };
++    for (int n : kPresets) {
++        SameLineIfFits("预设");
++        const std::string label = std::to_string(n);
++        if (ImGui::SmallButton(label.c_str()))
++            ctx.cfg.unitCap = n;
++    }
++
++    const std::string countText = cap.UnitCount() < 0 ? std::string("读不到") : std::to_string(cap.UnitCount());
++
++    if (!cap.Hooked()) {
++        ImGui::TextDisabled("正在连接游戏的上限函数…（进一局后再看）");
++    } else if (!ctx.cfg.enabled) {
++        ImGui::TextColored(kAmber, "总开关是关的：当前用的是原版上限 %d 人", cap.OriginalCap());
++    } else if (ctx.cfg.unitCapEnabled) {
++        ImGui::TextColored(kGreen, "已生效：上限 %d 人；当前 %s 人", cap.EffectiveCap(), countText.c_str());
++    } else {
++        ImGui::TextDisabled("关闭中：原版上限 %d 人；当前 %s 人", cap.OriginalCap(), countText.c_str());
++    }
++
++    ImGui::Spacing();
++    ImGui::TextWrapped("原版容量 = 5 + 升级树「指挥 I / II / III」加成（0~3，最多 8 人）。"
++                       "这里在游戏里包住 src.ui.upgrade.getMaxUnitBonus，让它返回「上限 - 5」；"
++                       "不改存档、不动升级树，关掉或修改器没开时都是原版。"
++                       "如果上限改了但画面人数没跟上，先转一次或重新进局看看。");
++}
++
++} // namespace ui
+diff --git a/src/ui/pages.h b/src/ui/pages.h
+index ff1017e..fb3f9da 100644
+--- a/src/ui/pages.h
++++ b/src/ui/pages.h
+@@ -4,6 +4,7 @@
+ //   page_resources.cpp  资源（金币 / 旋转 / 水晶）+ 状态栏
+ //   page_unit.cpp       单位：等级、属性、技能；下挂 unit_options / unit_imprints / unit_awakening 三个子页
+ //   page_items.cpp      物品
++//   page_unitcap.cpp    人数上限
+ //   page_slot.cpp       老虎机
+ //   page_system.cpp     诊断、设置
+ 
+@@ -26,6 +27,7 @@ void DrawImprintsBody(ImprintEditor& editor, ImprintsUi& ui);
+ void DrawAwakeningBody(AwakeningEditor& editor, AwakeningUi& ui);
+ 
+ void DrawItemsPage(MenuContext& ctx);
++void DrawUnitCapPage(MenuContext& ctx);
+ void DrawSlotPage(MenuContext& ctx);
+ void DrawDiagnosticsPage(MenuContext& ctx);
+ void DrawSettingsPage(MenuContext& ctx);
