@@ -1,32 +1,63 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index c29eed1..7b33aee 100644
+index c29eed1..3991987 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -34,6 +34,9 @@ set(APP_SOURCES
+@@ -34,6 +34,10 @@ set(APP_SOURCES
      src/game/items.cpp
      src/game/unitlevel.cpp
      src/game/slotctl.cpp
 +    src/game/unitcap.cpp
 +    src/game/corectl.cpp
 +    src/game/battlectl.cpp
++    src/game/oddsctl.cpp
      src/ui/overlay.cpp
      src/ui/widgets.cpp
      src/ui/labels.cpp
-@@ -44,6 +47,9 @@ set(APP_SOURCES
+@@ -44,6 +48,10 @@ set(APP_SOURCES
      src/ui/unit_imprints.cpp
      src/ui/unit_awakening.cpp
      src/ui/page_items.cpp
 +    src/ui/page_unitcap.cpp
 +    src/ui/page_core.cpp
 +    src/ui/page_battle.cpp
++    src/ui/page_odds.cpp
      src/ui/page_slot.cpp
      src/ui/page_system.cpp
  )
 diff --git a/src/app/config.cpp b/src/app/config.cpp
-index 0d6be7a..9487e8c 100644
+index 0d6be7a..0d479b4 100644
 --- a/src/app/config.cpp
 +++ b/src/app/config.cpp
-@@ -102,6 +102,32 @@ bool LoadConfig(const std::wstring& path, Config& cfg)
+@@ -34,6 +34,14 @@ bool ReadBool(const std::wstring& path, const wchar_t* section, const wchar_t* k
+     return _wcsicmp(s.c_str(), L"true") == 0 || s == L"1";
+ }
+ 
++double ReadDouble(const std::wstring& path, const wchar_t* section, const wchar_t* key, double def)
++{
++    std::wstring s = ReadStr(path, section, key, L"");
++    if (s.empty())
++        return def;
++    return wcstod(s.c_str(), nullptr);
++}
++
+ void WriteStr(const std::wstring& path, const wchar_t* section, const wchar_t* key, const std::wstring& value)
+ {
+     WritePrivateProfileStringW(section, key, value.c_str(), path.c_str());
+@@ -56,6 +64,13 @@ void WriteBool(const std::wstring& path, const wchar_t* section, const wchar_t*
+     WriteStr(path, section, key, value ? L"true" : L"false");
+ }
+ 
++void WriteDouble(const std::wstring& path, const wchar_t* section, const wchar_t* key, double value)
++{
++    wchar_t buf[64];
++    swprintf_s(buf, L"%.6g", value);
++    WriteStr(path, section, key, buf);
++}
++
+ void LoadVar(const std::wstring& path, const wchar_t* section, VarConfig& v)
+ {
+     v.lock = ReadBool(path, section, L"lock", v.lock);
+@@ -102,6 +117,55 @@ bool LoadConfig(const std::wstring& path, Config& cfg)
      if (cfg.slotSymbol.empty())
          cfg.slotSymbol = "A";
  
@@ -34,6 +65,21 @@ index 0d6be7a..9487e8c 100644
 +    cfg.unitCap = ReadInt(path, L"unitcap", L"cap", cfg.unitCap);
 +    if (cfg.unitCap < 5)
 +        cfg.unitCap = 5;
++
++    cfg.rarityOn = ReadBool(path, L"odds", L"rarity_on", cfg.rarityOn);
++    cfg.rarityNormal = ReadDouble(path, L"odds", L"rarity_normal", cfg.rarityNormal);
++    cfg.rarityAdvanced = ReadDouble(path, L"odds", L"rarity_advanced", cfg.rarityAdvanced);
++    cfg.rarityRare = ReadDouble(path, L"odds", L"rarity_rare", cfg.rarityRare);
++    cfg.rarityLegendary = ReadDouble(path, L"odds", L"rarity_legendary", cfg.rarityLegendary);
++    cfg.rarityPrism = ReadDouble(path, L"odds", L"rarity_prism", cfg.rarityPrism);
++    cfg.symbolOn = ReadBool(path, L"odds", L"symbol_on", cfg.symbolOn);
++    cfg.symW = ReadDouble(path, L"odds", L"sym_w", cfg.symW);
++    cfg.symA = ReadDouble(path, L"odds", L"sym_a", cfg.symA);
++    cfg.symS = ReadDouble(path, L"odds", L"sym_s", cfg.symS);
++    cfg.symH = ReadDouble(path, L"odds", L"sym_h", cfg.symH);
++    cfg.symM = ReadDouble(path, L"odds", L"sym_m", cfg.symM);
++    cfg.symD = ReadDouble(path, L"odds", L"sym_d", cfg.symD);
++    cfg.symJoker = ReadDouble(path, L"odds", L"sym_joker", cfg.symJoker);
 +
 +    cfg.coreGuaranteed = ReadBool(path, L"core", L"guaranteed", cfg.coreGuaranteed);
 +    const std::wstring coreId = ReadStr(path, L"core", L"force_id", L"");
@@ -51,6 +97,14 @@ index 0d6be7a..9487e8c 100644
 +    cfg.damageMulOn = ReadBool(path, L"battle", L"damage_on", cfg.damageMulOn);
 +    cfg.damageMulPct = ReadInt(path, L"battle", L"damage_pct", cfg.damageMulPct);
 +    cfg.oneHitKill = ReadBool(path, L"battle", L"one_hit", cfg.oneHitKill);
++    // 兼容旧版的 reroll_cost_one 开关
++    const bool oldOne = ReadBool(path, L"battle", L"reroll_cost_one", false);
++    cfg.rerollCostOn = ReadBool(path, L"battle", L"reroll_cost_on", oldOne);
++    cfg.rerollCostValue = ReadInt(path, L"battle", L"reroll_cost_value", cfg.rerollCostValue);
++    if (oldOne && cfg.rerollCostValue == 1)
++        cfg.rerollCostOn = true;
++    if (cfg.rerollCostValue < 0)
++        cfg.rerollCostValue = 0;
 +    cfg.lifePointsAdd = ReadInt(path, L"battle", L"life_points_add", cfg.lifePointsAdd);
 +    const std::wstring unitSym = ReadStr(path, L"battle", L"unit_symbol", L"W");
 +    cfg.addUnitSymbol = unitSym.empty() ? "W" : std::string(1, static_cast<char>(unitSym[0]));
@@ -59,12 +113,27 @@ index 0d6be7a..9487e8c 100644
      cfg.overlay = ReadBool(path, L"debug", L"overlay", cfg.overlay);
      return true;
  }
-@@ -122,6 +148,26 @@ bool SaveConfig(const std::wstring& path, const Config& cfg)
+@@ -122,6 +186,43 @@ bool SaveConfig(const std::wstring& path, const Config& cfg)
      WriteBool(path, L"slot", L"jackpot", cfg.slotJackpot);
      WriteStr(path, L"slot", L"symbol", std::wstring(cfg.slotSymbol.begin(), cfg.slotSymbol.end()));
  
 +    WriteBool(path, L"unitcap", L"enabled", cfg.unitCapEnabled);
 +    WriteInt(path, L"unitcap", L"cap", cfg.unitCap);
++
++    WriteBool(path, L"odds", L"rarity_on", cfg.rarityOn);
++    WriteDouble(path, L"odds", L"rarity_normal", cfg.rarityNormal);
++    WriteDouble(path, L"odds", L"rarity_advanced", cfg.rarityAdvanced);
++    WriteDouble(path, L"odds", L"rarity_rare", cfg.rarityRare);
++    WriteDouble(path, L"odds", L"rarity_legendary", cfg.rarityLegendary);
++    WriteDouble(path, L"odds", L"rarity_prism", cfg.rarityPrism);
++    WriteBool(path, L"odds", L"symbol_on", cfg.symbolOn);
++    WriteDouble(path, L"odds", L"sym_w", cfg.symW);
++    WriteDouble(path, L"odds", L"sym_a", cfg.symA);
++    WriteDouble(path, L"odds", L"sym_s", cfg.symS);
++    WriteDouble(path, L"odds", L"sym_h", cfg.symH);
++    WriteDouble(path, L"odds", L"sym_m", cfg.symM);
++    WriteDouble(path, L"odds", L"sym_d", cfg.symD);
++    WriteDouble(path, L"odds", L"sym_joker", cfg.symJoker);
 +
 +    WriteBool(path, L"core", L"guaranteed", cfg.coreGuaranteed);
 +    WriteStr(path, L"core", L"force_id", std::wstring(cfg.coreForceId.begin(), cfg.coreForceId.end()));
@@ -79,6 +148,8 @@ index 0d6be7a..9487e8c 100644
 +    WriteBool(path, L"battle", L"damage_on", cfg.damageMulOn);
 +    WriteInt(path, L"battle", L"damage_pct", cfg.damageMulPct);
 +    WriteBool(path, L"battle", L"one_hit", cfg.oneHitKill);
++    WriteBool(path, L"battle", L"reroll_cost_on", cfg.rerollCostOn);
++    WriteInt(path, L"battle", L"reroll_cost_value", cfg.rerollCostValue);
 +    WriteInt(path, L"battle", L"life_points_add", cfg.lifePointsAdd);
 +    WriteStr(path, L"battle", L"unit_symbol", std::wstring(1, static_cast<wchar_t>(cfg.addUnitSymbol.empty() ? 'W' : cfg.addUnitSymbol[0])));
 +    WriteInt(path, L"battle", L"unit_count", cfg.addUnitCount);
@@ -87,10 +158,10 @@ index 0d6be7a..9487e8c 100644
  
      // WritePrivateProfileString 有缓存，传全空参数强制落盘
 diff --git a/src/app/config.h b/src/app/config.h
-index 5fa58a0..367686b 100644
+index 5fa58a0..636a2a3 100644
 --- a/src/app/config.h
 +++ b/src/app/config.h
-@@ -34,6 +34,29 @@ struct Config {
+@@ -34,6 +34,37 @@ struct Config {
      bool slotJackpot = false;        // 大奖模式：每次转都是 9 格同一兵种
      std::string slotSymbol = "A";    // W A S M H D、J（小丑），或 random = 每次随机一种普通兵种
  
@@ -113,19 +184,27 @@ index 5fa58a0..367686b 100644
 +    bool damageMulOn = false;
 +    int damageMulPct = 100;
 +    bool oneHitKill = false;
++    bool rerollCostOn = false;    // 自定义核心 / 商店刷新花费
++    int rerollCostValue = 1;      // 想要的水晶花费，0 = 免费
 +    int lifePointsAdd = 1;        // 「增加生命点数」每次加多少
 +    std::string addUnitSymbol = "W"; // 军团面板加人：W A S M H D
 +    int addUnitCount = 1;
++
++    // [odds]  抽取概率（经 Lua 桥，需要注入）。百分比数字，会自动归一化
++    bool rarityOn = false;
++    double rarityNormal = 80, rarityAdvanced = 15, rarityRare = 4.5, rarityLegendary = 0.4, rarityPrism = 0.1;
++    bool symbolOn = false;
++    double symW = 19.3, symA = 19.3, symS = 19.3, symH = 14.5, symM = 14.5, symD = 9.6, symJoker = 3.5;
 +
      // [debug]
      bool overlay = true; // 左上角状态栏
  
 diff --git a/src/game/battlectl.cpp b/src/game/battlectl.cpp
 new file mode 100644
-index 0000000..900136e
+index 0000000..a897205
 --- /dev/null
 +++ b/src/game/battlectl.cpp
-@@ -0,0 +1,241 @@
+@@ -0,0 +1,276 @@
 +#include "battlectl.h"
 +
 +#include <windows.h>
@@ -150,6 +229,40 @@ index 0000000..900136e
 +c.defense = DEFENSE
 +c.damage = DAMAGE
 +c.oneHit = ONEHIT
++c.rerollCost = REROLLCOST -- -1 = 关闭；>=0 = 想要的花费
++
++-- 核心 / 商店刷新花费：点击前后把花费字段压成设定值
++local LP = type(love) == 'table' and love or nil
++if c.rerollCost >= 0 and LP and type(LP.mousepressed) == 'function' then
++  local MH = rawget(_G, '__sbMouseHook')
++  local cur = LP.mousepressed
++  if type(MH) ~= 'table' or MH.wrapper ~= cur then
++    local orig = cur
++    MH = { orig = orig }
++    local function cheap()
++      local u = rawget(_G, 'ui')
++      if type(u) ~= 'table' then return end
++      local cfg = rawget(_G, '__sbBattleCfg') or {}
++      local n = tonumber(cfg.rerollCost)
++      if n == nil or n < 0 then return end
++      n = math.max(0, math.floor(n))
++      u._coreSelectRerollCost = n
++      u._itemRerollCost = n
++      if type(u._coreSelect) == 'table' then
++        u._coreSelect.rerollCost = n
++        u._coreSelect._paidRerollCost = n
++      end
++    end
++    MH.wrapper = function(...)
++      cheap()
++      local r = orig(...)
++      cheap()
++      return r
++    end
++    LP.mousepressed = MH.wrapper
++    rawset(_G, '__sbMouseHook', MH)
++  end
++end
 +
 +-- 经验倍率：游戏成长实际是 absorbLV，包装它的成长倍率表
 +local K = package.loaded['src.data.constants']
@@ -294,7 +407,7 @@ index 0000000..900136e
 +
 +void BattleControl::Update(bool injected, bool speedOn, int speedPct, bool expOn, int expPct,
 +                           bool infLives, bool infHp, int defensePct, bool damageOn, int damagePct,
-+                           bool oneHit)
++                           bool oneHit, bool rerollCostOn, int rerollCostValue)
 +{
 +    if (Ready(syncJob_)) {
 +        const bridge::Result r = syncJob_.get();
@@ -320,7 +433,7 @@ index 0000000..900136e
 +    const bool changed = speedOn != sentSpeedOn_ || speedPct != sentSpeedPct_ || expOn != sentExpOn_ ||
 +        expPct != sentExpPct_ || infLives != sentInfLives_ || infHp != sentInfHp_ ||
 +        defensePct != sentDefensePct_ || damageOn != sentDamageOn_ || damagePct != sentDamagePct_ ||
-+        oneHit != sentOneHit_;
++        oneHit != sentOneHit_ || rerollCostOn != sentRerollCostOn_ || rerollCostValue != sentRerollCostValue_;
 +    const ULONGLONG now = GetTickCount64();
 +    if (syncJob_.valid() || (!changed && now - lastSync_ < 500))
 +        return;
@@ -330,7 +443,7 @@ index 0000000..900136e
 +    sentInfLives_ = infLives; sentInfHp_ = infHp;
 +    sentDefensePct_ = defensePct;
 +    sentDamageOn_ = damageOn; sentDamagePct_ = damagePct;
-+    sentOneHit_ = oneHit;
++    sentOneHit_ = oneHit; sentRerollCostOn_ = rerollCostOn; sentRerollCostValue_ = rerollCostValue;
 +
 +    const std::string prefix =
 +        "local SPEED = " + Number(speedOn ? speedPct / 100.0 : 1.0) +
@@ -339,7 +452,8 @@ index 0000000..900136e
 +        "\nlocal INFHP = " + (infHp ? "true" : "false") +
 +        "\nlocal DEFENSE = " + Number(defensePct / 100.0) +
 +        "\nlocal DAMAGE = " + Number(damageOn ? damagePct / 100.0 : 1.0) +
-+        "\nlocal ONEHIT = " + (oneHit ? "true" : "false") + "\n";
++        "\nlocal ONEHIT = " + (oneHit ? "true" : "false") +
++        "\nlocal REROLLCOST = " + Number(rerollCostOn ? static_cast<double>(rerollCostValue) : -1.0) + "\n";
 +    syncJob_ = Run(prefix + kSyncLua);
 +}
 +
@@ -369,10 +483,10 @@ index 0000000..900136e
 +}
 diff --git a/src/game/battlectl.h b/src/game/battlectl.h
 new file mode 100644
-index 0000000..28b25c5
+index 0000000..675302c
 --- /dev/null
 +++ b/src/game/battlectl.h
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,42 @@
 +#pragma once
 +
 +#include <future>
@@ -387,7 +501,7 @@ index 0000000..28b25c5
 +public:
 +    void Update(bool injected, bool speedOn, int speedPct, bool expOn, int expPct,
 +                bool infLives, bool infHp, int defensePct, bool damageOn, int damagePct,
-+                bool oneHit);
++                bool oneHit, bool rerollCostOn, int rerollCostValue);
 +
 +    void AddUnits(const std::string& symbol, int count); // 职业符号 W/A/S/M/H/D + 数量
 +    void RerollShop();
@@ -407,7 +521,8 @@ index 0000000..28b25c5
 +
 +    unsigned long long lastSync_ = 0;
 +    bool sentSpeedOn_ = false, sentExpOn_ = false, sentInfLives_ = false, sentInfHp_ = false;
-+    bool sentDamageOn_ = false, sentOneHit_ = false;
++    bool sentDamageOn_ = false, sentOneHit_ = false, sentRerollCostOn_ = false;
++    int sentRerollCostValue_ = 1;
 +    int sentSpeedPct_ = 100, sentExpPct_ = 100, sentDefensePct_ = 0, sentDamagePct_ = 100;
 +
 +    bool hooked_ = false;
@@ -703,6 +818,246 @@ index 0000000..ea43050
 +    std::string message_;
 +    std::string pendingAction_; // "open" / "close"，用来把回执翻成中文
 +};
+diff --git a/src/game/oddsctl.cpp b/src/game/oddsctl.cpp
+new file mode 100644
+index 0000000..b88c439
+--- /dev/null
++++ b/src/game/oddsctl.cpp
+@@ -0,0 +1,197 @@
++#include "oddsctl.h"
++
++#include <windows.h>
++
++#include <string>
++
++#include "luaops.h"
++
++namespace {
++
++using namespace luaops;
++
++constexpr const char* kSyncLua = R"lua(
++local cfg = rawget(_G, '__sbOddsCfg')
++if type(cfg) ~= 'table' then cfg = {}; rawset(_G, '__sbOddsCfg', cfg) end
++cfg.rarityOn = RARITYON
++cfg.rarity = { normal = RN, advanced = RA, rare = RR, legendary = RL, prism = RP }
++cfg.symbolOn = SYMBOLON
++cfg.sym = { W = SW, A = SA, S = SS, H = SH, M = SM, D = SD }
++cfg.joker = SJ
++
++local RKEYS = { 'normal', 'advanced', 'rare', 'legendary', 'prism' }
++local SKEYS = { 'W', 'A', 'S', 'H', 'M', 'D' }
++local rp, sp, jh = false, false, false
++local C = package.loaded['src.data.constants'] or require('src.data.constants')
++
++-- 稀有度：代理整张表，游戏升级写入时返回原始值，写完后再用我们的值
++if type(C) == 'table' and type(C.unitGrades) == 'table' and type(C.unitGrades.probabilities) == 'table' then
++  local P = C.unitGrades.probabilities
++  if rawget(_G, '__sbRarityProxyT') == P then
++    rp = true
++  elseif getmetatable(P) == nil then
++    local shadow = {}
++    for _, k in ipairs(RKEYS) do shadow[k] = tonumber(P[k]) or 0 end
++    for _, k in ipairs(RKEYS) do rawset(P, k, nil) end
++    local writing = false
++    local function norm()
++      local out, sum = {}, 0
++      for _, k in ipairs(RKEYS) do sum = sum + math.max(0, tonumber(cfg.rarity[k]) or 0) end
++      if sum <= 0 then
++        for _, k in ipairs(RKEYS) do out[k] = shadow[k] end
++        return out
++      end
++      for _, k in ipairs(RKEYS) do out[k] = math.max(0, tonumber(cfg.rarity[k]) or 0) / sum end
++      return out
++    end
++    setmetatable(P, {
++      __index = function(_, k)
++        if writing then
++          if k == 'advanced' then return shadow[k] end
++          writing = false
++        end
++        if cfg.rarityOn then
++          local v = norm()[k]
++          if v ~= nil then return v end
++        end
++        return shadow[k]
++      end,
++      __newindex = function(_, k, v)
++        if k == 'advanced' then writing = true elseif k == 'normal' then writing = false end
++        shadow[k] = v
++      end,
++    })
++    rawset(_G, '__sbRarityProxyT', P)
++    rp = true
++  end
++end
++
++-- 符号：游戏每次抽符号都读 constants.slot.symbolWeights；代理这个键
++if type(C) == 'table' and type(C.slot) == 'table' then
++  local slotT = C.slot
++  if rawget(_G, '__sbSymbolProxyT') == slotT then
++    sp = true
++  elseif getmetatable(slotT) == nil then
++    local held = rawget(slotT, 'symbolWeights')
++    if type(held) == 'table' then
++      rawset(slotT, 'symbolWeights', nil)
++      local function norm()
++        local out = {}
++        local j = math.max(0, math.min(0.05, tonumber(cfg.joker) or 0))
++        local room, sum = math.max(0, 1 - j), 0
++        for _, k in ipairs(SKEYS) do sum = sum + math.max(0, tonumber(cfg.sym[k]) or 0) end
++        for _, k in ipairs(SKEYS) do
++          local v = tonumber(held[k]) or 0
++          if sum > 0 and cfg.symbolOn then
++            out[k] = math.max(0, tonumber(cfg.sym[k]) or 0) / sum * room
++          else
++            out[k] = v
++          end
++        end
++        return out
++      end
++      setmetatable(slotT, {
++        __index = function(_, k)
++          if k ~= 'symbolWeights' then return nil end
++          return norm()
++        end,
++        __newindex = function(t, k, v)
++          if k == 'symbolWeights' then held = v else rawset(t, k, v) end
++        end,
++      })
++      rawset(_G, '__sbSymbolProxyT', slotT)
++      sp = true
++    end
++  end
++end
++
++-- 小丑：游戏硬上限 5%，同时改 getJokerChance 和 prepareSpin
++local Co = package.loaded['src.game.cores']
++if type(Co) == 'table' and cfg.symbolOn then
++  if type(Co.getJokerChance) == 'function' then
++    local H = rawget(_G, '__sbJokerHook')
++    local cur = Co.getJokerChance
++    if type(H) ~= 'table' or H.wrapper ~= cur then
++      local orig = cur
++      H = { orig = orig }
++      H.wrapper = function(...)
++        local c = rawget(_G, '__sbOddsCfg')
++        if c and c.symbolOn then return math.max(0, math.min(0.05, tonumber(c.joker) or 0)) end
++        return orig(...)
++      end
++      Co.getJokerChance = H.wrapper
++      rawset(_G, '__sbJokerHook', H)
++    end
++    jh = true
++  end
++  if type(Co.prepareSpin) == 'function' then
++    local H = rawget(_G, '__sbPrepSpinHook')
++    local cur = Co.prepareSpin
++    if type(H) ~= 'table' or H.wrapper ~= cur then
++      local orig = cur
++      H = { orig = orig }
++      H.wrapper = function(...)
++        local r = orig(...)
++        local c = rawget(_G, '__sbOddsCfg')
++        if c and c.symbolOn and type(r) == 'table' then
++          r.jokerChance = math.max(0, math.min(0.05, tonumber(c.joker) or 0))
++        end
++        return r
++      end
++      Co.prepareSpin = H.wrapper
++      rawset(_G, '__sbPrepSpinHook', H)
++    end
++    jh = true
++  end
++end
++return 'ok\t' .. (rp and '1' or '0') .. '\t' .. (sp and '1' or '0') .. '\t' .. (jh and '1' or '0')
++)lua";
++
++} // namespace
++
++void OddsControl::Update(bool injected, bool enabled,
++                         bool rarityOn, double rarityNormal, double rarityAdvanced, double rarityRare,
++                         double rarityLegendary, double rarityPrism,
++                         bool symbolOn, double w, double a, double s, double h, double m, double d, double joker)
++{
++    if (Ready(job_)) {
++        const bridge::Result r = job_.get();
++        if (!r.ok) {
++            error_ = r.text;
++            hooked_ = false;
++        } else {
++            const auto f = Split(r.text, '\t');
++            hooked_ = f[0] == "ok";
++            rarityProxy_ = f.size() > 1 && f[1] == "1";
++            symbolProxy_ = f.size() > 2 && f[2] == "1";
++            jokerHook_ = f.size() > 3 && f[3] == "1";
++            error_.clear();
++            if (!hooked_)
++                error_ = "还没连上游戏（找不到 constants）";
++        }
++    }
++    if (!injected) {
++        hooked_ = false;
++        return;
++    }
++    char buf[512];
++    std::snprintf(buf, sizeof(buf), "%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f",
++                  rarityOn ? 1.0 : 0.0, rarityNormal, rarityAdvanced, rarityRare, rarityLegendary, rarityPrism,
++                  symbolOn ? 1.0 : 0.0, w, a, s, h, m, d, joker);
++    const std::string sig = buf;
++    const ULONGLONG now = GetTickCount64();
++    if (job_.valid() || (sig == sentSig_ && now - lastSync_ < 1000))
++        return;
++    lastSync_ = now;
++    sentSig_ = sig;
++
++    const std::string prefix =
++        "local RARITYON = " + std::string(rarityOn && enabled ? "true" : "false") +
++        "\nlocal RN, RA, RR, RL, RP = " + Number(rarityNormal / 100.0) + ", " + Number(rarityAdvanced / 100.0) +
++        ", " + Number(rarityRare / 100.0) + ", " + Number(rarityLegendary / 100.0) + ", " + Number(rarityPrism / 100.0) +
++        "\nlocal SYMBOLON = " + std::string(symbolOn && enabled ? "true" : "false") +
++        "\nlocal SW, SA, SS, SH, SM, SD, SJ = " + Number(w / 100.0) + ", " + Number(a / 100.0) + ", " +
++        Number(s / 100.0) + ", " + Number(h / 100.0) + ", " + Number(m / 100.0) + ", " + Number(d / 100.0) +
++        ", " + Number(joker / 100.0) + "\n";
++    job_ = Run(prefix + kSyncLua);
++}
+diff --git a/src/game/oddsctl.h b/src/game/oddsctl.h
+new file mode 100644
+index 0000000..55dc266
+--- /dev/null
++++ b/src/game/oddsctl.h
+@@ -0,0 +1,31 @@
++#pragma once
++
++#include <future>
++#include <string>
++
++#include "bridge/luaclient.h"
++
++// 概率控制：经 Lua 桥给游戏的两张概率表装代理
++//   稀有度：constants.unitGrades.probabilities（普通 / 高级 / 稀有 / 传说 / 棱彩）
++//   符号：constants.slot.symbolWeights（六种职业），小丑走 cores.getJokerChance / prepareSpin
++// 代理只改读取结果，不改磁盘文件；关掉时透传原表。
++class OddsControl {
++public:
++    void Update(bool injected, bool enabled,
++                bool rarityOn, double rarityNormal, double rarityAdvanced, double rarityRare,
++                double rarityLegendary, double rarityPrism,
++                bool symbolOn, double w, double a, double s, double h, double m, double d, double joker);
++
++    bool Hooked() const { return hooked_; }
++    bool RarityProxy() const { return rarityProxy_; }
++    bool SymbolProxy() const { return symbolProxy_; }
++    bool JokerHook() const { return jokerHook_; }
++    const std::string& Error() const { return error_; }
++
++private:
++    std::future<bridge::Result> job_;
++    unsigned long long lastSync_ = 0;
++    std::string sentSig_;
++    bool hooked_ = false, rarityProxy_ = false, symbolProxy_ = false, jokerHook_ = false;
++    std::string error_;
++};
 diff --git a/src/game/unitcap.cpp b/src/game/unitcap.cpp
 new file mode 100644
 index 0000000..824df13
@@ -844,7 +1199,7 @@ index 0000000..71130a7
 +    std::string error_;
 +};
 diff --git a/src/ui/menu.cpp b/src/ui/menu.cpp
-index 8934656..ac0f7c6 100644
+index 8934656..7eae4e7 100644
 --- a/src/ui/menu.cpp
 +++ b/src/ui/menu.cpp
 @@ -2,6 +2,7 @@
@@ -863,7 +1218,7 @@ index 8934656..ac0f7c6 100644
      // 菜单关着就不去游戏里读（省游戏主线程的时间）；老虎机例外，见下
      const bool ready = menuOpen && injected;
      unit.Update(ready && shown.unit);
-@@ -16,8 +18,32 @@ void LuaPages::Update(bool menuOpen, bool injected, const Config& cfg)
+@@ -16,8 +18,35 @@ void LuaPages::Update(bool menuOpen, bool injected, const Config& cfg)
      imprints.Update(ready && shown.unit && shown.imprints);
      awakening.Update(ready && shown.unit && shown.awakening);
      items.Update(ready && shown.items);
@@ -877,7 +1232,10 @@ index 8934656..ac0f7c6 100644
 +                  cfg.enabled && cfg.infiniteLives, cfg.enabled && cfg.infiniteUnitHp,
 +                  cfg.enabled ? cfg.defensePct : 0,
 +                  cfg.enabled && cfg.damageMulOn, cfg.damageMulPct,
-+                  cfg.enabled && cfg.oneHitKill);
++                  cfg.enabled && cfg.oneHitKill, cfg.enabled && cfg.rerollCostOn, cfg.rerollCostValue);
++    odds.Update(injected, cfg.enabled,
++                cfg.rarityOn, cfg.rarityNormal, cfg.rarityAdvanced, cfg.rarityRare, cfg.rarityLegendary, cfg.rarityPrism,
++                cfg.symbolOn, cfg.symW, cfg.symA, cfg.symS, cfg.symH, cfg.symM, cfg.symD, cfg.symJoker);
 +}
 +
 +void LuaPages::UpdateDiag()
@@ -897,18 +1255,19 @@ index 8934656..ac0f7c6 100644
  }
  
  bool DrawMenu(MenuContext& ctx)
-@@ -38,6 +64,9 @@ bool DrawMenu(MenuContext& ctx)
+@@ -38,6 +67,10 @@ bool DrawMenu(MenuContext& ctx)
      static const Tab kTabs[] = {
          { "资源", [](MenuContext& c) { DrawResourcesPage(c.cfg, c.vars); } },
          { "单位", DrawUnitPage },
 +        { "人数上限", DrawUnitCapPage },
 +        { "核心", DrawCorePage },
 +        { "战斗", DrawBattlePage },
++        { "概率", DrawOddsPage },
          { "物品", DrawItemsPage },
          { "老虎机", DrawSlotPage },
          { "诊断", DrawDiagnosticsPage },
 diff --git a/src/ui/menu.h b/src/ui/menu.h
-index 1e10acd..0731bc9 100644
+index 1e10acd..ced2c2a 100644
 --- a/src/ui/menu.h
 +++ b/src/ui/menu.h
 @@ -2,6 +2,7 @@
@@ -919,7 +1278,7 @@ index 1e10acd..0731bc9 100644
  #include <map>
  #include <span>
  #include <string>
-@@ -11,10 +12,13 @@
+@@ -11,10 +12,14 @@
  #include "core/luavar.h"
  #include "core/process.h"
  #include "game/awakening.h"
@@ -927,28 +1286,30 @@ index 1e10acd..0731bc9 100644
 +#include "game/corectl.h"
  #include "game/imprints.h"
  #include "game/items.h"
++#include "game/oddsctl.h"
  #include "game/options.h"
  #include "game/slotctl.h"
 +#include "game/unitcap.h"
  #include "game/unitlevel.h"
  
  namespace ui {
-@@ -80,6 +84,9 @@ struct ItemsUi {
+@@ -80,6 +85,10 @@ struct ItemsUi {
  struct LuaPages {
      std::string injectError;
      SlotControl slot;
 +    UnitCapControl unitCap;
 +    CoreControl core;
 +    BattleControl battle;
++    OddsControl odds;
      UnitLevelEditor unit;
      OptionEditor options;
      ImprintEditor imprints;
-@@ -94,11 +101,19 @@ struct LuaPages {
+@@ -94,11 +103,19 @@ struct LuaPages {
  
      // 这一帧画了哪几页（画菜单前清零）：只给看得见的页刷新数据
      struct Shown {
 -        bool unit = false, options = false, imprints = false, awakening = false, items = false;
-+        bool unit = false, options = false, imprints = false, awakening = false, items = false, unitcap = false, core = false, battle = false;
++        bool unit = false, options = false, imprints = false, awakening = false, items = false, unitcap = false, core = false, battle = false, odds = false;
      } shown;
  
      // 每帧画菜单之前调用。menuOpen / injected 决定要不要去游戏里读数据
@@ -966,10 +1327,10 @@ index 1e10acd..0731bc9 100644
  // 画菜单要用到的东西
 diff --git a/src/ui/page_battle.cpp b/src/ui/page_battle.cpp
 new file mode 100644
-index 0000000..560a166
+index 0000000..360e8be
 --- /dev/null
 +++ b/src/ui/page_battle.cpp
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,103 @@
 +// 「战斗」页：游戏速度、军团加人、商店刷新、成长倍率、生命与战斗强化
 +
 +#include <algorithm>
@@ -1057,6 +1418,13 @@ index 0000000..560a166
 +    ToggleSwitch("全队伤害倍率", &cfg.damageMulOn, "按缓存的原始伤害乘倍率，关掉会还原");
 +    PercentInput("倍率##dm", cfg.damageMulPct, 100, 10000, "100% = 原版；1000% = 10 倍");
 +    ToggleSwitch("一击必杀", &cfg.oneHitKill, "每帧把敌人血量压到 1；下一击即可击杀");
++    ToggleSwitch("自定义核心 / 商店刷新花费", &cfg.rerollCostOn,
++                 "打开后核心和商店的刷新价格都变成下面填的数；关掉恢复原版价格");
++    ImGui::SetNextItemWidth(110.0f * Scale());
++    ImGui::InputInt("刷新花费（水晶）##rc", &cfg.rerollCostValue, 1, 10);
++    Clamp(cfg.rerollCostValue, 0, 9999);
++    ImGui::SameLine();
++    ImGui::TextDisabled("0 = 免费");
 +
 +    ImGui::EndDisabled();
 +
@@ -1170,6 +1538,76 @@ index 0000000..ec4436f
 +}
 +
 +} // namespace ui
+diff --git a/src/ui/page_odds.cpp b/src/ui/page_odds.cpp
+new file mode 100644
+index 0000000..23e37a4
+--- /dev/null
++++ b/src/ui/page_odds.cpp
+@@ -0,0 +1,64 @@
++// 「概率」页：老虎机稀有度与符号概率
++
++#include <algorithm>
++
++#include "labels.h"
++#include "pages.h"
++#include "widgets.h"
++
++namespace ui {
++
++namespace {
++
++void Pct(const char* label, double& v, double hi, const char* tip)
++{
++    ImGui::SetNextItemWidth(90.0f * Scale());
++    ImGui::InputDouble(label, &v, 0.1, 1.0, "%.2f");
++    v = std::max(0.0, std::min(hi, v));
++    if (tip)
++        ImGui::SetItemTooltip("%s", tip);
++}
++
++} // namespace
++
++void DrawOddsPage(MenuContext& ctx)
++{
++    if (!DrawBridgeBar(ctx, "概率"))
++        return;
++    ctx.pages.shown.odds = true;
++
++    OddsControl& odds = ctx.pages.odds;
++    Config& cfg = ctx.cfg;
++    ErrorText(odds.Error());
++
++    SectionTitle("稀有度概率");
++    ToggleSwitch("自定义稀有度概率", &cfg.rarityOn,
++                 "老虎机抽单位品级时按下面的比例；不用自己凑 100%，游戏里会自动归一化");
++    Pct("普通##r1", cfg.rarityNormal, 100.0, nullptr);
++    ImGui::SameLine(); Pct("高级##r2", cfg.rarityAdvanced, 100.0, nullptr);
++    Pct("稀有##r3", cfg.rarityRare, 100.0, nullptr);
++    ImGui::SameLine(); Pct("传说##r4", cfg.rarityLegendary, 100.0, nullptr);
++    Pct("棱彩##r5", cfg.rarityPrism, 100.0, nullptr);
++    ImGui::TextDisabled("稀有度代理：%s", odds.RarityProxy() ? "已挂上" : "未挂上");
++
++    SectionTitle("符号概率");
++    ToggleSwitch("自定义符号概率", &cfg.symbolOn,
++                 "六种职业符号按下面的比例；小丑单独算，先扣掉小丑概率，再把职业归一到剩下的部分");
++    Pct("战士 W##s1", cfg.symW, 100.0, nullptr);
++    ImGui::SameLine(); Pct("弓手 A##s2", cfg.symA, 100.0, nullptr);
++    Pct("枪兵 S##s3", cfg.symS, 100.0, nullptr);
++    ImGui::SameLine(); Pct("骑兵 H##s4", cfg.symH, 100.0, nullptr);
++    Pct("法师 M##s5", cfg.symM, 100.0, nullptr);
++    ImGui::SameLine(); Pct("决斗者 D##s6", cfg.symD, 100.0, nullptr);
++    Pct("小丑 %##s7", cfg.symJoker, 5.0, "游戏对小丑概率有 5% 硬上限，填超过也只按 5% 算");
++    ImGui::TextDisabled("符号代理：%s；小丑 Hook：%s",
++                        odds.SymbolProxy() ? "已挂上" : "未挂上",
++                        odds.JokerHook() ? "已挂上" : "未挂上");
++
++    ImGui::Spacing();
++    ImGui::TextWrapped("原理：在游戏里给 constants.unitGrades.probabilities / constants.slot.symbolWeights "
++                       "装元表代理，读取时返回你填的比例，写入仍交给游戏原逻辑。"
++                       "关掉开关就透传原版概率，不改游戏文件；换局 / 重开后每秒自检会重新挂上。");
++}
++
++} // namespace ui
 diff --git a/src/ui/page_system.cpp b/src/ui/page_system.cpp
 index 8a5d574..d497c24 100644
 --- a/src/ui/page_system.cpp
@@ -1223,7 +1661,7 @@ index 8a5d574..d497c24 100644
  
  void DrawSettingsPage(MenuContext& ctx)
 diff --git a/src/ui/page_unit.cpp b/src/ui/page_unit.cpp
-index d8422dd..060177a 100644
+index d8422dd..7efc06b 100644
 --- a/src/ui/page_unit.cpp
 +++ b/src/ui/page_unit.cpp
 @@ -304,7 +304,7 @@ bool DrawBridgeBar(const MenuContext& ctx, const char* feature)
@@ -1231,7 +1669,7 @@ index d8422dd..060177a 100644
          ImGui::TextWrapped("改%s要在游戏里执行 Lua，需要先把 slotbound_lua.dll 注入游戏。"
                             "它只改 love.dll 导入表里的一个函数指针，不改游戏文件，点「卸载注入」或游戏退出就没了。", feature);
 -        if (ImGui::Button("注入（启用单位 / 物品 / 老虎机功能）")) {
-+        if (ImGui::Button("注入（启用单位 / 物品 / 老虎机 / 人数上限 / 核心 / 战斗功能）")) {
++        if (ImGui::Button("注入（启用单位 / 物品 / 老虎机 / 人数上限 / 核心 / 战斗 / 概率功能）")) {
              injectError.clear();
              // DLL 内嵌在修改器 exe 里，先释放到 %LOCALAPPDATA%\slotbound-trainer\ 再注入
              const std::wstring dll = bridge::ExtractEmbeddedDll(injectError);
@@ -1298,26 +1736,28 @@ index 0000000..bd41d2f
 +
 +} // namespace ui
 diff --git a/src/ui/pages.h b/src/ui/pages.h
-index ff1017e..461ef82 100644
+index ff1017e..d764fb7 100644
 --- a/src/ui/pages.h
 +++ b/src/ui/pages.h
-@@ -4,6 +4,9 @@
+@@ -4,6 +4,10 @@
  //   page_resources.cpp  资源（金币 / 旋转 / 水晶）+ 状态栏
  //   page_unit.cpp       单位：等级、属性、技能；下挂 unit_options / unit_imprints / unit_awakening 三个子页
  //   page_items.cpp      物品
 +//   page_unitcap.cpp    人数上限
 +//   page_core.cpp       核心：强制选择页 / 核心必出
 +//   page_battle.cpp     战斗：速度 / 军团 / 商店 / 成长 / 生命 / 伤害
++//   page_odds.cpp       概率：稀有度 / 符号
  //   page_slot.cpp       老虎机
  //   page_system.cpp     诊断、设置
  
-@@ -26,6 +29,9 @@ void DrawImprintsBody(ImprintEditor& editor, ImprintsUi& ui);
+@@ -26,6 +30,10 @@ void DrawImprintsBody(ImprintEditor& editor, ImprintsUi& ui);
  void DrawAwakeningBody(AwakeningEditor& editor, AwakeningUi& ui);
  
  void DrawItemsPage(MenuContext& ctx);
 +void DrawUnitCapPage(MenuContext& ctx);
 +void DrawCorePage(MenuContext& ctx);
 +void DrawBattlePage(MenuContext& ctx);
++void DrawOddsPage(MenuContext& ctx);
  void DrawSlotPage(MenuContext& ctx);
  void DrawDiagnosticsPage(MenuContext& ctx);
  void DrawSettingsPage(MenuContext& ctx);
