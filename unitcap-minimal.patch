@@ -844,10 +844,26 @@ index 0000000..71130a7
 +    std::string error_;
 +};
 diff --git a/src/ui/menu.cpp b/src/ui/menu.cpp
-index 8934656..977b332 100644
+index 8934656..ac0f7c6 100644
 --- a/src/ui/menu.cpp
 +++ b/src/ui/menu.cpp
-@@ -16,8 +16,16 @@ void LuaPages::Update(bool menuOpen, bool injected, const Config& cfg)
+@@ -2,6 +2,7 @@
+ 
+ #include "menu.h"
+ 
++#include "game/luaops.h"
+ #include "pages.h"
+ #include "widgets.h"
+ 
+@@ -9,6 +10,7 @@ namespace ui {
+ 
+ void LuaPages::Update(bool menuOpen, bool injected, const Config& cfg)
+ {
++    UpdateDiag();
+     // 菜单关着就不去游戏里读（省游戏主线程的时间）；老虎机例外，见下
+     const bool ready = menuOpen && injected;
+     unit.Update(ready && shown.unit);
+@@ -16,8 +18,32 @@ void LuaPages::Update(bool menuOpen, bool injected, const Config& cfg)
      imprints.Update(ready && shown.unit && shown.imprints);
      awakening.Update(ready && shown.unit && shown.awakening);
      items.Update(ready && shown.items);
@@ -862,10 +878,26 @@ index 8934656..977b332 100644
 +                  cfg.enabled ? cfg.defensePct : 0,
 +                  cfg.enabled && cfg.damageMulOn, cfg.damageMulPct,
 +                  cfg.enabled && cfg.oneHitKill);
++}
++
++void LuaPages::UpdateDiag()
++{
++    if (luaops::Ready(diagJob_)) {
++        const bridge::Result r = diagJob_.get();
++        diagResult = r.ok ? r.text : (std::string("错误：") + r.text);
++    }
++}
++
++void LuaPages::RunDiag(std::string code)
++{
++    if (diagJob_.valid())
++        return;
++    diagResult.clear();
++    diagJob_ = luaops::Run(std::move(code));
  }
  
  bool DrawMenu(MenuContext& ctx)
-@@ -38,6 +46,9 @@ bool DrawMenu(MenuContext& ctx)
+@@ -38,6 +64,9 @@ bool DrawMenu(MenuContext& ctx)
      static const Tab kTabs[] = {
          { "资源", [](MenuContext& c) { DrawResourcesPage(c.cfg, c.vars); } },
          { "单位", DrawUnitPage },
@@ -876,10 +908,18 @@ index 8934656..977b332 100644
          { "老虎机", DrawSlotPage },
          { "诊断", DrawDiagnosticsPage },
 diff --git a/src/ui/menu.h b/src/ui/menu.h
-index 1e10acd..7ab0e25 100644
+index 1e10acd..0731bc9 100644
 --- a/src/ui/menu.h
 +++ b/src/ui/menu.h
-@@ -11,10 +11,13 @@
+@@ -2,6 +2,7 @@
+ 
+ // 菜单和状态栏的对外接口：主循环只认这里的几个类型和函数，各页怎么画见 pages.h
+ 
++#include <future>
+ #include <map>
+ #include <span>
+ #include <string>
+@@ -11,10 +12,13 @@
  #include "core/luavar.h"
  #include "core/process.h"
  #include "game/awakening.h"
@@ -893,7 +933,7 @@ index 1e10acd..7ab0e25 100644
  #include "game/unitlevel.h"
  
  namespace ui {
-@@ -80,6 +83,9 @@ struct ItemsUi {
+@@ -80,6 +84,9 @@ struct ItemsUi {
  struct LuaPages {
      std::string injectError;
      SlotControl slot;
@@ -903,7 +943,7 @@ index 1e10acd..7ab0e25 100644
      UnitLevelEditor unit;
      OptionEditor options;
      ImprintEditor imprints;
-@@ -94,7 +100,7 @@ struct LuaPages {
+@@ -94,11 +101,19 @@ struct LuaPages {
  
      // 这一帧画了哪几页（画菜单前清零）：只给看得见的页刷新数据
      struct Shown {
@@ -912,6 +952,18 @@ index 1e10acd..7ab0e25 100644
      } shown;
  
      // 每帧画菜单之前调用。menuOpen / injected 决定要不要去游戏里读数据
+     void Update(bool menuOpen, bool injected, const Config& cfg);
++
++    // 诊断页：经 Lua 桥执行一段代码并回显结果
++    void RunDiag(std::string code);
++    void UpdateDiag();
++    std::string diagResult;
++
++private:
++    std::future<bridge::Result> diagJob_;
+ };
+ 
+ // 画菜单要用到的东西
 diff --git a/src/ui/page_battle.cpp b/src/ui/page_battle.cpp
 new file mode 100644
 index 0000000..560a166
@@ -1118,6 +1170,58 @@ index 0000000..ec4436f
 +}
 +
 +} // namespace ui
+diff --git a/src/ui/page_system.cpp b/src/ui/page_system.cpp
+index 8a5d574..d497c24 100644
+--- a/src/ui/page_system.cpp
++++ b/src/ui/page_system.cpp
+@@ -1,5 +1,7 @@
+ // 「诊断」「设置」两页
+ 
++#include <string>
++
+ #include "pages.h"
+ #include "widgets.h"
+ 
+@@ -32,6 +34,39 @@ void DrawDiagnosticsPage(MenuContext& ctx)
+             t.var.Relocate();
+     ImGui::EndDisabled();
+     ImGui::SetItemTooltip("重新扫一遍游戏内存，约一秒；正常不用点，位置变了会自动重找");
++
++    SectionTitle("Lua 诊断（需要注入）");
++    static char code[512] = "return tostring(_G.coins)";
++    ImGui::InputTextMultiline("##luacode", code, sizeof(code), ImVec2(0.0f, 60.0f * Scale()));
++    if (ImGui::Button("执行 Lua"))
++        ctx.pages.RunDiag(code);
++    ImGui::SameLine();
++    if (ImGui::Button("诊断金币变量"))
++        ctx.pages.RunDiag(R"lua(
++local out = {}
++local function add(s) out[#out+1] = s end
++add('coins=' .. tostring(rawget(_G, 'coins')))
++add('displayCoins=' .. tostring(rawget(_G, 'displayCoins')))
++local u = rawget(_G, 'ui')
++add('ui.coinsBalanceTarget=' .. tostring(type(u) == 'table' and u.coinsBalanceTarget))
++local bf = rawget(_G, 'battlefield')
++add('battlefield.coins=' .. tostring(type(bf) == 'table' and rawget(bf, 'coins')))
++local near = {}
++for k, v in pairs(_G) do
++  if type(k) == 'string' and type(v) == 'number' then
++    near[#near+1] = { k = k, v = v, d = math.abs(v - 100) }
++  end
++end
++table.sort(near, function(a, b) return a.d < b.d end)
++local s = {}
++for i = 1, math.min(30, #near) do
++  s[#s+1] = string.format('%s=%.6g(Δ%.6g)', near[i].k, near[i].v, near[i].d)
++end
++add('最接近100的全局: ' .. table.concat(s, ', '))
++return table.concat(out, '\n')
++)lua");
++    ImGui::TextDisabled("结果：");
++    ImGui::TextWrapped("%s", ctx.pages.diagResult.empty() ? "（还没有执行）" : ctx.pages.diagResult.c_str());
+ }
+ 
+ void DrawSettingsPage(MenuContext& ctx)
 diff --git a/src/ui/page_unit.cpp b/src/ui/page_unit.cpp
 index d8422dd..060177a 100644
 --- a/src/ui/page_unit.cpp
