@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index c29eed1..c845320 100644
+index c29eed1..66beafc 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -34,6 +34,10 @@ set(APP_SOURCES
+@@ -34,16 +34,27 @@ set(APP_SOURCES
      src/game/items.cpp
      src/game/unitlevel.cpp
      src/game/slotctl.cpp
@@ -10,10 +10,15 @@ index c29eed1..c845320 100644
 +    src/game/corectl.cpp
 +    src/game/battlectl.cpp
 +    src/game/oddsctl.cpp
++    src/game/unitplanner.cpp
      src/ui/overlay.cpp
      src/ui/widgets.cpp
      src/ui/labels.cpp
-@@ -44,6 +48,11 @@ set(APP_SOURCES
+     src/ui/menu.cpp
+     src/ui/page_resources.cpp
+     src/ui/page_unit.cpp
++    src/ui/page_planner.cpp
+     src/ui/unit_options.cpp
      src/ui/unit_imprints.cpp
      src/ui/unit_awakening.cpp
      src/ui/page_items.cpp
@@ -1357,8 +1362,244 @@ index 0000000..71130a7
 +    int unitCount_ = -1;
 +    std::string error_;
 +};
+diff --git a/src/game/unitplanner.cpp b/src/game/unitplanner.cpp
+new file mode 100644
+index 0000000..4072697
+--- /dev/null
++++ b/src/game/unitplanner.cpp
+@@ -0,0 +1,190 @@
++#include "unitplanner.h"
++
++#include <cstdlib>
++
++#include "luaops.h"
++
++namespace {
++
++using namespace luaops;
++
++// 深拷贝词条 / 刻印 / 觉醒实例，避免多个单位共享同一张表
++constexpr const char* kDeepCopy = R"lua(
++local function __sbDeep(v, seen)
++  if type(v) ~= 'table' then return v end
++  seen = seen or {}
++  if seen[v] then return seen[v] end
++  local r = {}
++  seen[v] = r
++  for k, x in pairs(v) do r[__sbDeep(k, seen)] = __sbDeep(x, seen) end
++  return r
++end
++)lua";
++
++// 一行：index \31 sym \31 grade \31 absorbLV \31 rank
++constexpr const char* kPollLua = R"lua(
++local bf = rawget(_G, 'battlefield')
++local out = {}
++for i, u in ipairs(bf and bf.rosterUnits or {}) do
++  out[#out+1] = table.concat({ tostring(u.index or i), tostring(u.sym), tostring(u.grade),
++    tostring(u.absorbLV or 1), tostring(u.rank or 1) }, '\31')
++end
++return table.concat(out, '\30')
++)lua";
++
++constexpr char kRowSep = '\x1E';
++constexpr char kFieldSep = '\x1F';
++
++} // namespace
++
++std::string UnitPlanner::PollCode() const
++{
++    return kPollLua;
++}
++
++void UnitPlanner::OnPoll(const bridge::Result& r)
++{
++    rows_.clear();
++    if (!r.ok || r.text.empty())
++        return;
++    for (const std::string& line : Split(r.text, kRowSep)) {
++        const auto f = Split(line, kFieldSep);
++        if (f.size() < 5)
++            continue;
++        Row row;
++        row.index = atoi(f[0].c_str());
++        row.sym = f[1];
++        row.grade = f[2];
++        row.level = atoi(f[3].c_str());
++        row.rank = atoi(f[4].c_str());
++        if (row.level < 1)
++            row.level = 1;
++        if (row.rank < 1)
++            row.rank = 1;
++        row.targetLevel = row.level;
++        row.targetRank = row.rank;
++        rows_.push_back(row);
++    }
++}
++
++void UnitPlanner::ApplyTable()
++{
++    if (Busy() || rows_.empty())
++        return;
++    std::string code = kDeepCopy + R"lua(
++local bf = rawget(_G, 'battlefield')
++if type(bf) ~= 'table' then return '还没进到一局游戏' end
++local f = rawget(_G, '__slotSetAwakeningLevel')
++local T = {
++)lua";
++    for (const Row& row : rows_)
++        code += "  { " + std::to_string(row.index) + ", " + std::to_string(row.targetLevel) + ", " +
++            std::to_string(row.targetRank) + " },\n";
++    code += R"lua(
++}
++for _, t in ipairs(T) do
++  for _, u in ipairs(bf.rosterUnits or {}) do
++    if (u.index or 0) == t[1] then
++      if type(f) == 'function' then f(u, t[2]) else u.absorbLV = t[2] end
++      u.rank = t[3]
++      u.pendingRank = nil
++      u.needsClassSelect = nil
++    end
++  end
++end
++return 'ok'
++)lua";
++    Act(std::move(code), "已按表格应用到全部单位");
++}
++
++void UnitPlanner::SetAll(int level, int rank)
++{
++    if (Busy() || rows_.empty() || level < 1 || rank < 1)
++        return;
++    for (Row& row : rows_) {
++        row.targetLevel = level;
++        row.targetRank = rank;
++    }
++    ApplyTable();
++}
++
++void UnitPlanner::CopyFrom(int sourceIndex, bool options, bool imprints, bool awakening)
++{
++    if (Busy() || sourceIndex < 0)
++        return;
++    const std::string code = kDeepCopy +
++        "local OPT, IMP, AWA = " + (options ? "true" : "false") + ", " + (imprints ? "true" : "false") +
++        ", " + (awakening ? "true" : "false") + "\n" +
++        "local SRC = " + std::to_string(sourceIndex) + "\n" + R"lua(
++local bf = rawget(_G, 'battlefield')
++if type(bf) ~= 'table' then return '还没进到一局游戏' end
++local src
++for _, u in ipairs(bf.rosterUnits or {}) do
++  if (u.index or 0) == SRC then src = u break end
++end
++if not src then return '找不到来源单位' end
++for _, u in ipairs(bf.rosterUnits or {}) do
++  if u ~= src then
++    if OPT then
++      u.randomOptions = __sbDeep(src.randomOptions)
++      u.randomOption = u.randomOptions and u.randomOptions[1]
++    end
++    if IMP then
++      u.imprints = __sbDeep(src.imprints)
++      u.maxImprintSlots = src.maxImprintSlots
++    end
++    if AWA then
++      u.awakening = __sbDeep(src.awakening)
++      local A = package.loaded['src.game.awakening']
++      if type(A) == 'table' and type(A.normalize) == 'function' then pcall(A.normalize, u) end
++    end
++  end
++end
++return 'ok'
++)lua";
++    Act(std::move(code), "已复制到全部单位");
++}
++
++void UnitPlanner::SetSkill(double cdMul, bool applyParam, const std::string& paramKey, double paramValue)
++{
++    if (Busy())
++        return;
++    const std::string code = std::string(kCdHookLua) +
++        "local CD, AP, KEY, VAL = " + Number(cdMul) + ", " + (applyParam ? "true" : "false") + ", " +
++        Quote(paramKey) + ", " + Number(paramValue) + "\n" + R"lua(
++local bf = rawget(_G, 'battlefield')
++if type(bf) ~= 'table' then return '还没进到一局游戏' end
++for _, u in ipairs(bf.rosterUnits or {}) do
++  u.__sbSkillCdMul = CD
++  if AP then
++    local ov = type(u.__sbSkillRt) == 'table' and u.__sbSkillRt or {}
++    ov[KEY] = VAL
++    u.__sbSkillRt = ov
++  end
++end
++return 'ok'
++)lua";
++    Act(std::move(code), "已应用到全部单位的技能参数");
++}
++
++void UnitPlanner::AddUnits(const std::string& sym, const std::string& grade, int count)
++{
++    if (Busy() || sym.empty() || count < 1 || count > 999)
++        return;
++    const std::string code = "local SYM, GRADE, N = " + Quote(sym) + ", " + Quote(grade) + ", " +
++        std::to_string(count) + "\n" + R"lua(
++local bf = rawget(_G, 'battlefield')
++if type(bf) ~= 'table' or type(bf.spawn) ~= 'function' then return '还没进到一局游戏' end
++local before = #(bf.rosterUnits or {})
++local ok, err = pcall(bf.spawn, bf, SYM, N)
++if not ok then return 'err:' .. tostring(err) end
++for i = before + 1, #(bf.rosterUnits or {}) do
++  local u = bf.rosterUnits[i]
++  u.grade = GRADE
++  u.rank = 1
++  u.absorbLV = 1
++end
++return 'ok'
++)lua";
++    Act(std::move(code), "已添加单位");
++}
+diff --git a/src/game/unitplanner.h b/src/game/unitplanner.h
+new file mode 100644
+index 0000000..37fae66
+--- /dev/null
++++ b/src/game/unitplanner.h
+@@ -0,0 +1,34 @@
++#pragma once
++
++#include <string>
++#include <vector>
++
++#include "lua_editor.h"
++
++// 单位统一规划：读 battlefield.rosterUnits，一次性改全部单位。
++// 所有改动都经 Lua 桥在游戏主线程执行；等级走游戏自己的 __slotSetAwakeningLevel。
++class UnitPlanner : public LuaEditor {
++public:
++    struct Row {
++        int index = 0;
++        std::string sym, grade;
++        int level = 1, rank = 1;
++        int targetLevel = 1, targetRank = 1;
++        bool targetsSet = false;
++    };
++
++    const std::vector<Row>& Rows() const { return rows_; }
++    int Count() const { return static_cast<int>(rows_.size()); }
++
++    void ApplyTable();
++    void SetAll(int level, int rank);
++    void CopyFrom(int sourceIndex, bool options, bool imprints, bool awakening);
++    void SetSkill(double cdMul, bool applyParam, const std::string& paramKey, double paramValue);
++    void AddUnits(const std::string& sym, const std::string& grade, int count);
++
++private:
++    std::string PollCode() const override;
++    void OnPoll(const bridge::Result& r) override;
++
++    std::vector<Row> rows_;
++};
 diff --git a/src/ui/menu.cpp b/src/ui/menu.cpp
-index 8934656..f0fa0c0 100644
+index 8934656..393a25b 100644
 --- a/src/ui/menu.cpp
 +++ b/src/ui/menu.cpp
 @@ -2,6 +2,7 @@
@@ -1369,7 +1610,7 @@ index 8934656..f0fa0c0 100644
  #include "pages.h"
  #include "widgets.h"
  
-@@ -9,6 +10,7 @@ namespace ui {
+@@ -9,15 +10,50 @@ namespace ui {
  
  void LuaPages::Update(bool menuOpen, bool injected, const Config& cfg)
  {
@@ -1377,7 +1618,8 @@ index 8934656..f0fa0c0 100644
      // 菜单关着就不去游戏里读（省游戏主线程的时间）；老虎机例外，见下
      const bool ready = menuOpen && injected;
      unit.Update(ready && shown.unit);
-@@ -16,8 +18,41 @@ void LuaPages::Update(bool menuOpen, bool injected, const Config& cfg)
++    planner.Update(ready && shown.unit && shown.planning);
+     options.Update(ready && shown.unit && shown.options);
      imprints.Update(ready && shown.unit && shown.imprints);
      awakening.Update(ready && shown.unit && shown.awakening);
      items.Update(ready && shown.items);
@@ -1420,7 +1662,7 @@ index 8934656..f0fa0c0 100644
  }
  
  bool DrawMenu(MenuContext& ctx)
-@@ -38,6 +73,11 @@ bool DrawMenu(MenuContext& ctx)
+@@ -38,6 +74,11 @@ bool DrawMenu(MenuContext& ctx)
      static const Tab kTabs[] = {
          { "资源", [](MenuContext& c) { DrawResourcesPage(c.cfg, c.vars); } },
          { "单位", DrawUnitPage },
@@ -1433,7 +1675,7 @@ index 8934656..f0fa0c0 100644
          { "老虎机", DrawSlotPage },
          { "诊断", DrawDiagnosticsPage },
 diff --git a/src/ui/menu.h b/src/ui/menu.h
-index 1e10acd..8467e42 100644
+index 1e10acd..122e08b 100644
 --- a/src/ui/menu.h
 +++ b/src/ui/menu.h
 @@ -2,6 +2,7 @@
@@ -1444,7 +1686,7 @@ index 1e10acd..8467e42 100644
  #include <map>
  #include <span>
  #include <string>
-@@ -11,10 +12,14 @@
+@@ -11,10 +12,15 @@
  #include "core/luavar.h"
  #include "core/process.h"
  #include "game/awakening.h"
@@ -1456,10 +1698,11 @@ index 1e10acd..8467e42 100644
  #include "game/options.h"
  #include "game/slotctl.h"
 +#include "game/unitcap.h"
++#include "game/unitplanner.h"
  #include "game/unitlevel.h"
  
  namespace ui {
-@@ -80,6 +85,10 @@ struct ItemsUi {
+@@ -80,7 +86,12 @@ struct ItemsUi {
  struct LuaPages {
      std::string injectError;
      SlotControl slot;
@@ -1468,14 +1711,16 @@ index 1e10acd..8467e42 100644
 +    BattleControl battle;
 +    OddsControl odds;
      UnitLevelEditor unit;
++    UnitPlanner planner;
      OptionEditor options;
      ImprintEditor imprints;
-@@ -94,11 +103,19 @@ struct LuaPages {
+     AwakeningEditor awakening;
+@@ -94,11 +105,19 @@ struct LuaPages {
  
      // 这一帧画了哪几页（画菜单前清零）：只给看得见的页刷新数据
      struct Shown {
 -        bool unit = false, options = false, imprints = false, awakening = false, items = false;
-+        bool unit = false, options = false, imprints = false, awakening = false, items = false, unitcap = false, core = false, battle = false, odds = false, enemy = false;
++        bool unit = false, options = false, imprints = false, awakening = false, planning = false, items = false, unitcap = false, core = false, battle = false, odds = false, enemy = false;
      } shown;
  
      // 每帧画菜单之前调用。menuOpen / injected 决定要不要去游戏里读数据
@@ -1976,6 +2221,140 @@ index 0000000..23e37a4
 +}
 +
 +} // namespace ui
+diff --git a/src/ui/page_planner.cpp b/src/ui/page_planner.cpp
+new file mode 100644
+index 0000000..d72d9c7
+--- /dev/null
++++ b/src/ui/page_planner.cpp
+@@ -0,0 +1,128 @@
++// 单位页「规划」子分类：全队批量配置与添加单位
++
++#include <string>
++
++#include "pages.h"
++#include "widgets.h"
++
++namespace ui {
++
++namespace {
++
++const char* kSymbols[] = { "W", "A", "S", "H", "M", "D" };
++const char* kGrades[] = { "normal", "advanced", "rare", "legendary", "prism" };
++const char* kGradeNames[] = { "普通", "高级", "稀有", "传说", "棱彩" };
++const char* kParamKeys[] = { "charges", "chance", "internalCooldown" };
++const char* kParamNames[] = { "触发次数", "触发概率", "内置冷却" };
++
++} // namespace
++
++void DrawPlannerBody(UnitPlanner& planner)
++{
++    ErrorText(planner.Error());
++    HintText(planner.Message());
++
++    const auto& rows = planner.Rows();
++    ImGui::TextDisabled("当前阵容 %d 个单位；改完点对应的应用按钮", planner.Count());
++    ImGui::BeginDisabled(planner.Busy());
++
++    SectionTitle("全队等级 / 星级");
++    static int allLevel = 1, allRank = 1;
++    ImGui::SetNextItemWidth(90.0f * Scale());
++    ImGui::InputInt("目标吸收LV##aplv", &allLevel, 1, 10);
++    ImGui::SameLine();
++    ImGui::SetNextItemWidth(90.0f * Scale());
++    ImGui::InputInt("目标星级##aprank", &allRank, 1, 1);
++    if (allLevel < 1) allLevel = 1;
++    if (allRank < 1) allRank = 1;
++    if (allRank > 5) allRank = 5;
++    ImGui::SameLine();
++    if (ImGui::Button("应用到全队"))
++        planner.SetAll(allLevel, allRank);
++
++    SectionTitle("全单位表格");
++    ImGui::Columns(6, "plannerCols", false);
++    ImGui::TextDisabled("序号"); ImGui::NextColumn();
++    ImGui::TextDisabled("兵种"); ImGui::NextColumn();
++    ImGui::TextDisabled("品级"); ImGui::NextColumn();
++    ImGui::TextDisabled("当前 LV/星"); ImGui::NextColumn();
++    ImGui::TextDisabled("目标 LV"); ImGui::NextColumn();
++    ImGui::TextDisabled("目标星"); ImGui::NextColumn();
++    ImGui::Separator();
++    for (UnitPlanner::Row& row : rows) {
++        ImGui::PushID(row.index);
++        ImGui::Text("%d", row.index); ImGui::NextColumn();
++        ImGui::TextUnformatted(row.sym.c_str()); ImGui::NextColumn();
++        ImGui::TextUnformatted(row.grade.c_str()); ImGui::NextColumn();
++        ImGui::Text("%d / %d", row.level, row.rank); ImGui::NextColumn();
++        ImGui::SetNextItemWidth(70.0f * Scale());
++        ImGui::InputInt("##tl", &row.targetLevel); ImGui::NextColumn();
++        ImGui::SetNextItemWidth(60.0f * Scale());
++        ImGui::InputInt("##tr", &row.targetRank); ImGui::NextColumn();
++        if (row.targetLevel < 1) row.targetLevel = 1;
++        if (row.targetRank < 1) row.targetRank = 1;
++        if (row.targetRank > 5) row.targetRank = 5;
++        ImGui::PopID();
++    }
++    ImGui::Columns(1);
++    if (ImGui::Button("按表格应用到全部单位"))
++        planner.ApplyTable();
++
++    SectionTitle("复制配置到其他单位");
++    static int sourceIndex = 1;
++    ImGui::SetNextItemWidth(90.0f * Scale());
++    ImGui::InputInt("来源单位序号##src", &sourceIndex, 1, 1);
++    if (sourceIndex < 1) sourceIndex = 1;
++    ImGui::SameLine();
++    if (ImGui::Button("复制词条到全队"))
++        planner.CopyFrom(sourceIndex, true, false, false);
++    ImGui::SameLine();
++    if (ImGui::Button("复制刻印到全队"))
++        planner.CopyFrom(sourceIndex, false, true, false);
++    ImGui::SameLine();
++    if (ImGui::Button("复制觉醒到全队"))
++        planner.CopyFrom(sourceIndex, false, false, true);
++    ImGui::TextDisabled("来源单位就是上面表格里的序号；复制会覆盖其他单位的同名配置");
++
++    SectionTitle("全队技能 / 冷却");
++    static double cdMul = 1.0;
++    static double paramValue = 1.0;
++    static int paramIdx = 0;
++    static bool applyParam = false;
++    ImGui::SetNextItemWidth(100.0f * Scale());
++    ImGui::InputDouble("技能冷却倍率##cdm", &cdMul, 0.1, 1.0, "%.2f");
++    if (cdMul < 0.01) cdMul = 0.01;
++    ImGui::SameLine();
++    ImGui::Checkbox("同时改被动参数##ap", &applyParam);
++    ImGui::SetNextItemWidth(140.0f * Scale());
++    ImGui::Combo("参数##pkey", &paramIdx, kParamNames, 3);
++    ImGui::SetNextItemWidth(100.0f * Scale());
++    ImGui::InputDouble("参数值##pval", &paramValue, 0.1, 1.0, "%.3f");
++    if (ImGui::Button("应用技能设置到全队"))
++        planner.SetSkill(cdMul, applyParam, kParamKeys[paramIdx], paramValue);
++    ImGui::TextDisabled("冷却倍率 0.10 = 原版十分之一；被动参数键会写到每个单位的覆盖表里");
++
++    SectionTitle("添加单位");
++    ImGui::TextDisabled("兵种：");
++    static int symIdx = 0;
++    for (int i = 0; i < 6; ++i) {
++        ImGui::SameLine();
++        if (ImGui::RadioButton(kSymbols[i], symIdx == i))
++            symIdx = i;
++    }
++    static int gradeIdx = 0;
++    ImGui::SetNextItemWidth(120.0f * Scale());
++    ImGui::Combo("品级##grade", &gradeIdx, kGradeNames, 5);
++    static int count = 1;
++    ImGui::SetNextItemWidth(90.0f * Scale());
++    ImGui::InputInt("数量##addn", &count, 1, 5);
++    if (count < 1) count = 1;
++    if (count > 999) count = 999;
++    ImGui::SameLine();
++    if (ImGui::Button("添加"))
++        planner.AddUnits(kSymbols[symIdx], kGrades[gradeIdx], count);
++
++    ImGui::EndDisabled();
++}
++
++} // namespace ui
 diff --git a/src/ui/page_system.cpp b/src/ui/page_system.cpp
 index 8a5d574..e233fa7 100644
 --- a/src/ui/page_system.cpp
@@ -2077,10 +2456,22 @@ index 8a5d574..e233fa7 100644
  
  void DrawSettingsPage(MenuContext& ctx)
 diff --git a/src/ui/page_unit.cpp b/src/ui/page_unit.cpp
-index d8422dd..7efc06b 100644
+index d8422dd..7a62389 100644
 --- a/src/ui/page_unit.cpp
 +++ b/src/ui/page_unit.cpp
-@@ -304,7 +304,7 @@ bool DrawBridgeBar(const MenuContext& ctx, const char* feature)
+@@ -278,6 +278,11 @@ void DrawSubTabs(LuaPages& pages)
+         DrawAwakeningBody(pages.awakening, pages.awakeningUi);
+         ImGui::EndTabItem();
+     }
++    if (ImGui::BeginTabItem("规划")) {
++        pages.shown.planning = true;
++        DrawPlannerBody(pages.planner);
++        ImGui::EndTabItem();
++    }
+     ImGui::EndTabBar();
+ }
+ 
+@@ -304,7 +309,7 @@ bool DrawBridgeBar(const MenuContext& ctx, const char* feature)
      if (!ctx.injected) {
          ImGui::TextWrapped("改%s要在游戏里执行 Lua，需要先把 slotbound_lua.dll 注入游戏。"
                             "它只改 love.dll 导入表里的一个函数指针，不改游戏文件，点「卸载注入」或游戏退出就没了。", feature);
@@ -2152,7 +2543,7 @@ index 0000000..bd41d2f
 +
 +} // namespace ui
 diff --git a/src/ui/pages.h b/src/ui/pages.h
-index ff1017e..d7c77dd 100644
+index ff1017e..f782ac4 100644
 --- a/src/ui/pages.h
 +++ b/src/ui/pages.h
 @@ -4,6 +4,11 @@
@@ -2167,7 +2558,7 @@ index ff1017e..d7c77dd 100644
  //   page_slot.cpp       老虎机
  //   page_system.cpp     诊断、设置
  
-@@ -26,6 +31,11 @@ void DrawImprintsBody(ImprintEditor& editor, ImprintsUi& ui);
+@@ -26,6 +31,12 @@ void DrawImprintsBody(ImprintEditor& editor, ImprintsUi& ui);
  void DrawAwakeningBody(AwakeningEditor& editor, AwakeningUi& ui);
  
  void DrawItemsPage(MenuContext& ctx);
@@ -2176,6 +2567,7 @@ index ff1017e..d7c77dd 100644
 +void DrawBattlePage(MenuContext& ctx);
 +void DrawEnemyPage(MenuContext& ctx);
 +void DrawOddsPage(MenuContext& ctx);
++void DrawPlannerBody(UnitPlanner& planner);
  void DrawSlotPage(MenuContext& ctx);
  void DrawDiagnosticsPage(MenuContext& ctx);
  void DrawSettingsPage(MenuContext& ctx);
