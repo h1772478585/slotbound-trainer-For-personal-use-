@@ -25,7 +25,7 @@ index c29eed1..3991987 100644
      src/ui/page_system.cpp
  )
 diff --git a/src/app/config.cpp b/src/app/config.cpp
-index 0d6be7a..0d479b4 100644
+index 0d6be7a..6bc1570 100644
 --- a/src/app/config.cpp
 +++ b/src/app/config.cpp
 @@ -34,6 +34,14 @@ bool ReadBool(const std::wstring& path, const wchar_t* section, const wchar_t* k
@@ -57,7 +57,7 @@ index 0d6be7a..0d479b4 100644
  void LoadVar(const std::wstring& path, const wchar_t* section, VarConfig& v)
  {
      v.lock = ReadBool(path, section, L"lock", v.lock);
-@@ -102,6 +117,55 @@ bool LoadConfig(const std::wstring& path, Config& cfg)
+@@ -102,6 +117,66 @@ bool LoadConfig(const std::wstring& path, Config& cfg)
      if (cfg.slotSymbol.empty())
          cfg.slotSymbol = "A";
  
@@ -101,6 +101,17 @@ index 0d6be7a..0d479b4 100644
 +    const bool oldOne = ReadBool(path, L"battle", L"reroll_cost_one", false);
 +    cfg.rerollCostOn = ReadBool(path, L"battle", L"reroll_cost_on", oldOne);
 +    cfg.rerollCostValue = ReadInt(path, L"battle", L"reroll_cost_value", cfg.rerollCostValue);
++    cfg.inventoryCapOn = ReadBool(path, L"battle", L"inventory_cap_on", cfg.inventoryCapOn);
++    cfg.inventoryCapValue = ReadInt(path, L"battle", L"inventory_cap_value", cfg.inventoryCapValue);
++    cfg.coreCapOn = ReadBool(path, L"battle", L"core_cap_on", cfg.coreCapOn);
++    cfg.coreCapValue = ReadInt(path, L"battle", L"core_cap_value", cfg.coreCapValue);
++    cfg.spinCostOn = ReadBool(path, L"battle", L"spin_cost_on", cfg.spinCostOn);
++    cfg.spinCostValue = ReadInt(path, L"battle", L"spin_cost_value", cfg.spinCostValue);
++    cfg.waveEnemyOn = ReadBool(path, L"battle", L"wave_enemy_on", cfg.waveEnemyOn);
++    const std::wstring wave = ReadStr(path, L"battle", L"wave_enemies", L"");
++    cfg.waveEnemies.clear();
++    for (wchar_t c : wave)
++        cfg.waveEnemies += static_cast<char>(c);
 +    if (oldOne && cfg.rerollCostValue == 1)
 +        cfg.rerollCostOn = true;
 +    if (cfg.rerollCostValue < 0)
@@ -113,7 +124,7 @@ index 0d6be7a..0d479b4 100644
      cfg.overlay = ReadBool(path, L"debug", L"overlay", cfg.overlay);
      return true;
  }
-@@ -122,6 +186,43 @@ bool SaveConfig(const std::wstring& path, const Config& cfg)
+@@ -122,6 +197,51 @@ bool SaveConfig(const std::wstring& path, const Config& cfg)
      WriteBool(path, L"slot", L"jackpot", cfg.slotJackpot);
      WriteStr(path, L"slot", L"symbol", std::wstring(cfg.slotSymbol.begin(), cfg.slotSymbol.end()));
  
@@ -150,6 +161,14 @@ index 0d6be7a..0d479b4 100644
 +    WriteBool(path, L"battle", L"one_hit", cfg.oneHitKill);
 +    WriteBool(path, L"battle", L"reroll_cost_on", cfg.rerollCostOn);
 +    WriteInt(path, L"battle", L"reroll_cost_value", cfg.rerollCostValue);
++    WriteBool(path, L"battle", L"inventory_cap_on", cfg.inventoryCapOn);
++    WriteInt(path, L"battle", L"inventory_cap_value", cfg.inventoryCapValue);
++    WriteBool(path, L"battle", L"core_cap_on", cfg.coreCapOn);
++    WriteInt(path, L"battle", L"core_cap_value", cfg.coreCapValue);
++    WriteBool(path, L"battle", L"spin_cost_on", cfg.spinCostOn);
++    WriteInt(path, L"battle", L"spin_cost_value", cfg.spinCostValue);
++    WriteBool(path, L"battle", L"wave_enemy_on", cfg.waveEnemyOn);
++    WriteStr(path, L"battle", L"wave_enemies", std::wstring(cfg.waveEnemies.begin(), cfg.waveEnemies.end()));
 +    WriteInt(path, L"battle", L"life_points_add", cfg.lifePointsAdd);
 +    WriteStr(path, L"battle", L"unit_symbol", std::wstring(1, static_cast<wchar_t>(cfg.addUnitSymbol.empty() ? 'W' : cfg.addUnitSymbol[0])));
 +    WriteInt(path, L"battle", L"unit_count", cfg.addUnitCount);
@@ -158,10 +177,10 @@ index 0d6be7a..0d479b4 100644
  
      // WritePrivateProfileString 有缓存，传全空参数强制落盘
 diff --git a/src/app/config.h b/src/app/config.h
-index 5fa58a0..636a2a3 100644
+index 5fa58a0..dada7e8 100644
 --- a/src/app/config.h
 +++ b/src/app/config.h
-@@ -34,6 +34,37 @@ struct Config {
+@@ -34,6 +34,45 @@ struct Config {
      bool slotJackpot = false;        // 大奖模式：每次转都是 9 格同一兵种
      std::string slotSymbol = "A";    // W A S M H D、J（小丑），或 random = 每次随机一种普通兵种
  
@@ -186,6 +205,14 @@ index 5fa58a0..636a2a3 100644
 +    bool oneHitKill = false;
 +    bool rerollCostOn = false;    // 自定义核心 / 商店刷新花费
 +    int rerollCostValue = 1;      // 想要的水晶花费，0 = 免费
++    bool inventoryCapOn = false;  // 自定义背包格数上限（原版最多 8）
++    int inventoryCapValue = 8;
++    bool coreCapOn = false;       // 自定义核心数量上限（原版默认 8）
++    int coreCapValue = 8;
++    bool spinCostOn = false;      // 自定义老虎机拉杆金币花费
++    int spinCostValue = 100;
++    bool waveEnemyOn = false;     // 自定义每波敌人（含 BOSS）
++    std::string waveEnemies;      // 逗号分隔的敌人键名，如 Goblin,Beholder
 +    int lifePointsAdd = 1;        // 「增加生命点数」每次加多少
 +    std::string addUnitSymbol = "W"; // 军团面板加人：W A S M H D
 +    int addUnitCount = 1;
@@ -201,10 +228,10 @@ index 5fa58a0..636a2a3 100644
  
 diff --git a/src/game/battlectl.cpp b/src/game/battlectl.cpp
 new file mode 100644
-index 0000000..a897205
+index 0000000..3b57b43
 --- /dev/null
 +++ b/src/game/battlectl.cpp
-@@ -0,0 +1,276 @@
+@@ -0,0 +1,350 @@
 +#include "battlectl.h"
 +
 +#include <windows.h>
@@ -230,6 +257,26 @@ index 0000000..a897205
 +c.damage = DAMAGE
 +c.oneHit = ONEHIT
 +c.rerollCost = REROLLCOST -- -1 = 关闭；>=0 = 想要的花费
++c.invCap = INVCAP
++c.coreCap = CORECAP
++c.spinCost = SPINCOST -- -1 = 关闭
++c.waveEnemies = WAVEENEMIES
++
++-- 商店物品栏容量：游戏直接调全局 getItemInventoryCapacity()
++local GH = rawget(_G, '__sbInvCapHook')
++local curG = rawget(_G, 'getItemInventoryCapacity')
++if type(curG) == 'function' and (type(GH) ~= 'table' or GH.wrapper ~= curG) then
++  local orig = curG
++  GH = { orig = orig }
++  GH.wrapper = function(...)
++    local cfg = rawget(_G, '__sbBattleCfg') or {}
++    local n = tonumber(cfg.invCap)
++    if n and n >= 0 then return math.max(1, math.floor(n)) end
++    return orig(...)
++  end
++  rawset(_G, 'getItemInventoryCapacity', GH.wrapper)
++  rawset(_G, '__sbInvCapHook', GH)
++end
 +
 +-- 核心 / 商店刷新花费：点击前后把花费字段压成设定值
 +local LP = type(love) == 'table' and love or nil
@@ -300,6 +347,16 @@ index 0000000..a897205
 +  BH = { orig = orig, bf = bf }
 +  local function apply(self)
 +    local cfg = rawget(_G, '__sbBattleCfg') or {}
++    local cc = tonumber(cfg.coreCap)
++    if cc and cc >= 0 then
++      local u = rawget(_G, 'ui')
++      if type(u) == 'table' then
++        if type(u.coreCountDisplay) ~= 'table' then u.coreCountDisplay = {} end
++        u.coreCountDisplay.max = math.max(1, math.floor(cc))
++      end
++    end
++    local sc = tonumber(cfg.spinCost)
++    if sc and sc >= 0 then rawset(_G, 'spinCost', math.max(0, math.floor(sc))) end
 +    if cfg.infLives then
 +      self.baseDamageBuffer = 0
 +      if (tonumber(self.baseHP) or 0) < 9999 then self.baseHP = 9999 end
@@ -343,6 +400,36 @@ index 0000000..a897205
 +  end
 +  bf.update = BH.wrapper
 +  rawset(_G, '__sbBattleUpdateHook', BH)
++end
++
++-- 下一波敌人：游戏 beginBattle 会写 battlefield._enemySpawnQueue，orig 之后按我们填的列表覆盖
++if type(bf.beginBattle) == 'function' then
++  local EH = rawget(_G, '__sbWaveEnemyHook')
++  if type(EH) ~= 'table' or EH.bf ~= bf or EH.wrapper ~= bf.beginBattle then
++    local orig = bf.beginBattle
++    EH = { orig = orig, bf = bf }
++    EH.wrapper = function(self, ...)
++      local r = orig(self, ...)
++      local cfg = rawget(_G, '__sbBattleCfg') or {}
++      local spec = cfg.waveEnemies
++      if type(spec) == 'string' and spec ~= '' then
++        local list = {}
++        for part in string.gmatch(spec, '[^,]+') do
++          local k = string.match(part, '^%s*(.-)%s*$')
++          if k and k ~= '' then list[#list + 1] = k end
++        end
++        if #list > 0 then
++          self._enemySpawnQueue = list
++          self._enemySpawned = false
++          self._enemySpawnDelayT = 0
++          self._cursedMushroomExpectedEnemyCount = #list
++        end
++      end
++      return r
++    end
++    bf.beginBattle = EH.wrapper
++    rawset(_G, '__sbWaveEnemyHook', EH)
++  end
 +end
 +return 'ok\t1'
 +)lua";
@@ -407,7 +494,9 @@ index 0000000..a897205
 +
 +void BattleControl::Update(bool injected, bool speedOn, int speedPct, bool expOn, int expPct,
 +                           bool infLives, bool infHp, int defensePct, bool damageOn, int damagePct,
-+                           bool oneHit, bool rerollCostOn, int rerollCostValue)
++                           bool oneHit, bool rerollCostOn, int rerollCostValue,
++                           bool inventoryCapOn, int inventoryCapValue, bool coreCapOn, int coreCapValue,
++                           bool spinCostOn, int spinCostValue, bool waveEnemyOn, const std::string& waveEnemies)
 +{
 +    if (Ready(syncJob_)) {
 +        const bridge::Result r = syncJob_.get();
@@ -433,7 +522,11 @@ index 0000000..a897205
 +    const bool changed = speedOn != sentSpeedOn_ || speedPct != sentSpeedPct_ || expOn != sentExpOn_ ||
 +        expPct != sentExpPct_ || infLives != sentInfLives_ || infHp != sentInfHp_ ||
 +        defensePct != sentDefensePct_ || damageOn != sentDamageOn_ || damagePct != sentDamagePct_ ||
-+        oneHit != sentOneHit_ || rerollCostOn != sentRerollCostOn_ || rerollCostValue != sentRerollCostValue_;
++        oneHit != sentOneHit_ || rerollCostOn != sentRerollCostOn_ || rerollCostValue != sentRerollCostValue_ ||
++        inventoryCapOn != sentInventoryCapOn_ || inventoryCapValue != sentInventoryCapValue_ ||
++        coreCapOn != sentCoreCapOn_ || coreCapValue != sentCoreCapValue_ ||
++        spinCostOn != sentSpinCostOn_ || spinCostValue != sentSpinCostValue_ ||
++        waveEnemyOn != sentWaveEnemyOn_ || waveEnemies != sentWaveEnemies_;
 +    const ULONGLONG now = GetTickCount64();
 +    if (syncJob_.valid() || (!changed && now - lastSync_ < 500))
 +        return;
@@ -444,6 +537,10 @@ index 0000000..a897205
 +    sentDefensePct_ = defensePct;
 +    sentDamageOn_ = damageOn; sentDamagePct_ = damagePct;
 +    sentOneHit_ = oneHit; sentRerollCostOn_ = rerollCostOn; sentRerollCostValue_ = rerollCostValue;
++    sentInventoryCapOn_ = inventoryCapOn; sentInventoryCapValue_ = inventoryCapValue;
++    sentCoreCapOn_ = coreCapOn; sentCoreCapValue_ = coreCapValue;
++    sentSpinCostOn_ = spinCostOn; sentSpinCostValue_ = spinCostValue;
++    sentWaveEnemyOn_ = waveEnemyOn; sentWaveEnemies_ = waveEnemies;
 +
 +    const std::string prefix =
 +        "local SPEED = " + Number(speedOn ? speedPct / 100.0 : 1.0) +
@@ -453,7 +550,11 @@ index 0000000..a897205
 +        "\nlocal DEFENSE = " + Number(defensePct / 100.0) +
 +        "\nlocal DAMAGE = " + Number(damageOn ? damagePct / 100.0 : 1.0) +
 +        "\nlocal ONEHIT = " + (oneHit ? "true" : "false") +
-+        "\nlocal REROLLCOST = " + Number(rerollCostOn ? static_cast<double>(rerollCostValue) : -1.0) + "\n";
++        "\nlocal REROLLCOST = " + Number(rerollCostOn ? static_cast<double>(rerollCostValue) : -1.0) +
++        "\nlocal INVCAP = " + Number(inventoryCapOn ? static_cast<double>(inventoryCapValue) : -1.0) +
++        "\nlocal CORECAP = " + Number(coreCapOn ? static_cast<double>(coreCapValue) : -1.0) +
++        "\nlocal SPINCOST = " + Number(spinCostOn ? static_cast<double>(spinCostValue) : -1.0) +
++        "\nlocal WAVEENEMIES = " + (waveEnemyOn ? Quote(waveEnemies) : "nil") + "\n";
 +    syncJob_ = Run(prefix + kSyncLua);
 +}
 +
@@ -483,10 +584,10 @@ index 0000000..a897205
 +}
 diff --git a/src/game/battlectl.h b/src/game/battlectl.h
 new file mode 100644
-index 0000000..675302c
+index 0000000..a747555
 --- /dev/null
 +++ b/src/game/battlectl.h
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,48 @@
 +#pragma once
 +
 +#include <future>
@@ -501,7 +602,9 @@ index 0000000..675302c
 +public:
 +    void Update(bool injected, bool speedOn, int speedPct, bool expOn, int expPct,
 +                bool infLives, bool infHp, int defensePct, bool damageOn, int damagePct,
-+                bool oneHit, bool rerollCostOn, int rerollCostValue);
++                bool oneHit, bool rerollCostOn, int rerollCostValue,
++                bool inventoryCapOn, int inventoryCapValue, bool coreCapOn, int coreCapValue,
++                bool spinCostOn, int spinCostValue, bool waveEnemyOn, const std::string& waveEnemies);
 +
 +    void AddUnits(const std::string& symbol, int count); // 职业符号 W/A/S/M/H/D + 数量
 +    void RerollShop();
@@ -523,6 +626,10 @@ index 0000000..675302c
 +    bool sentSpeedOn_ = false, sentExpOn_ = false, sentInfLives_ = false, sentInfHp_ = false;
 +    bool sentDamageOn_ = false, sentOneHit_ = false, sentRerollCostOn_ = false;
 +    int sentRerollCostValue_ = 1;
++    bool sentInventoryCapOn_ = false, sentCoreCapOn_ = false, sentSpinCostOn_ = false;
++    int sentInventoryCapValue_ = 8, sentCoreCapValue_ = 8, sentSpinCostValue_ = 100;
++    bool sentWaveEnemyOn_ = false;
++    std::string sentWaveEnemies_;
 +    int sentSpeedPct_ = 100, sentExpPct_ = 100, sentDefensePct_ = 0, sentDamagePct_ = 100;
 +
 +    bool hooked_ = false;
@@ -1199,7 +1306,7 @@ index 0000000..71130a7
 +    std::string error_;
 +};
 diff --git a/src/ui/menu.cpp b/src/ui/menu.cpp
-index 8934656..7eae4e7 100644
+index 8934656..13c2dbe 100644
 --- a/src/ui/menu.cpp
 +++ b/src/ui/menu.cpp
 @@ -2,6 +2,7 @@
@@ -1218,7 +1325,7 @@ index 8934656..7eae4e7 100644
      // 菜单关着就不去游戏里读（省游戏主线程的时间）；老虎机例外，见下
      const bool ready = menuOpen && injected;
      unit.Update(ready && shown.unit);
-@@ -16,8 +18,35 @@ void LuaPages::Update(bool menuOpen, bool injected, const Config& cfg)
+@@ -16,8 +18,39 @@ void LuaPages::Update(bool menuOpen, bool injected, const Config& cfg)
      imprints.Update(ready && shown.unit && shown.imprints);
      awakening.Update(ready && shown.unit && shown.awakening);
      items.Update(ready && shown.items);
@@ -1232,7 +1339,11 @@ index 8934656..7eae4e7 100644
 +                  cfg.enabled && cfg.infiniteLives, cfg.enabled && cfg.infiniteUnitHp,
 +                  cfg.enabled ? cfg.defensePct : 0,
 +                  cfg.enabled && cfg.damageMulOn, cfg.damageMulPct,
-+                  cfg.enabled && cfg.oneHitKill, cfg.enabled && cfg.rerollCostOn, cfg.rerollCostValue);
++                  cfg.enabled && cfg.oneHitKill, cfg.enabled && cfg.rerollCostOn, cfg.rerollCostValue,
++                  cfg.enabled && cfg.inventoryCapOn, cfg.inventoryCapValue,
++                  cfg.enabled && cfg.coreCapOn, cfg.coreCapValue,
++                  cfg.enabled && cfg.spinCostOn, cfg.spinCostValue,
++                  cfg.enabled && cfg.waveEnemyOn, cfg.waveEnemies);
 +    odds.Update(injected, cfg.enabled,
 +                cfg.rarityOn, cfg.rarityNormal, cfg.rarityAdvanced, cfg.rarityRare, cfg.rarityLegendary, cfg.rarityPrism,
 +                cfg.symbolOn, cfg.symW, cfg.symA, cfg.symS, cfg.symH, cfg.symM, cfg.symD, cfg.symJoker);
@@ -1255,7 +1366,7 @@ index 8934656..7eae4e7 100644
  }
  
  bool DrawMenu(MenuContext& ctx)
-@@ -38,6 +67,10 @@ bool DrawMenu(MenuContext& ctx)
+@@ -38,6 +71,10 @@ bool DrawMenu(MenuContext& ctx)
      static const Tab kTabs[] = {
          { "资源", [](MenuContext& c) { DrawResourcesPage(c.cfg, c.vars); } },
          { "单位", DrawUnitPage },
@@ -1327,13 +1438,14 @@ index 1e10acd..ced2c2a 100644
  // 画菜单要用到的东西
 diff --git a/src/ui/page_battle.cpp b/src/ui/page_battle.cpp
 new file mode 100644
-index 0000000..360e8be
+index 0000000..2b5c7a4
 --- /dev/null
 +++ b/src/ui/page_battle.cpp
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,197 @@
 +// 「战斗」页：游戏速度、军团加人、商店刷新、成长倍率、生命与战斗强化
 +
 +#include <algorithm>
++#include <cstdio>
 +#include <string>
 +
 +#include "labels.h"
@@ -1345,6 +1457,34 @@ index 0000000..360e8be
 +namespace {
 +
 +void Clamp(int& v, int lo, int hi) { v = std::max(lo, std::min(hi, v)); }
++
++struct EnemyEntry {
++    const char* key;
++    const char* zh;
++    bool boss;
++};
++
++// 游戏 battlefield 里实际认的敌人键名 + 中文名；带 boss 的是 BOSS
++static const EnemyEntry kEnemies[] = {
++    { "Goblin", "哥布林", false }, { "GoblinThief", "哥布林盗贼", false },
++    { "Orc", "兽人", false }, { "Orc Axe Raider", "兽人斧袭者", false },
++    { "Orc Veteran", "兽人老兵", false }, { "Charge Orc", "冲锋兽人", false },
++    { "Orc War Chief", "兽人酋长", false }, { "Wolf", "狼", false },
++    { "Eye Crawler", "眼虫", false }, { "Eye Bat", "眼蝠", false },
++    { "Stinger Bat", "毒针蝠", false }, { "Deceiver", "欺瞒者", false },
++    { "Cave Brute", "洞穴怪兽", false }, { "Observer", "观察者", false },
++    { "Canyon Raptor", "峡谷迅猛龙", false }, { "Lizard Hunter", "蜥蜴猎手", false },
++    { "Firebreather", "喷火者", false }, { "Axe Lizard", "斧蜥蜴", false },
++    { "Dust Hyena", "沙鬣狗", false }, { "Gnoll Archer", "豺狼弓手", false },
++    { "Shield Gnoll", "盾豺狼", false }, { "Wasteland Warrior", "荒野战士", false },
++    { "Blood Assassin", "血色刺客", false }, { "Gnoll Berserker", "豺狼狂战士", false },
++    { "Cackle Shaman", "狂笑萨满", false }, { "Pack Chief", "群落首领", false },
++    { "Bat Matron", "蝠群母巢", false }, { "Gazer", "凝视者", false },
++    { "Goblin Rider", "哥布林骑手", false }, { "Warg Orc", "座狼兽人", false },
++    { "Orc Berserker", "兽人狂战士", false }, { "Beholder", "百眼王（BOSS）", true },
++    { "Grimwolf Orc", "幽狼兽人（BOSS）", true }, { "Howl Orc", "嚎叫兽人（BOSS）", true },
++    { "Orc Arch Shaman", "兽人大萨满（BOSS）", true },
++};
 +
 +void PercentInput(const char* label, int& pct, int lo, int hi, const char* tip)
 +{
@@ -1425,6 +1565,71 @@ index 0000000..360e8be
 +    Clamp(cfg.rerollCostValue, 0, 9999);
 +    ImGui::SameLine();
 +    ImGui::TextDisabled("0 = 免费");
++
++    SectionTitle("容量与拉杆花费");
++    ToggleSwitch("自定义物品栏格数", &cfg.inventoryCapOn, "商店背包不再卡 8 格；填多少就是多少格");
++    ImGui::SetNextItemWidth(100.0f * Scale());
++    ImGui::InputInt("格数##ic", &cfg.inventoryCapValue, 1, 5);
++    Clamp(cfg.inventoryCapValue, 1, 999);
++
++    ToggleSwitch("自定义核心数量上限", &cfg.coreCapOn, "核心持有 / 选择上限不再卡 8 个");
++    ImGui::SetNextItemWidth(100.0f * Scale());
++    ImGui::InputInt("个数##cc", &cfg.coreCapValue, 1, 5);
++    Clamp(cfg.coreCapValue, 1, 999);
++
++    ToggleSwitch("自定义拉杆金币花费", &cfg.spinCostOn, "每次拉杆固定扣下面的金币数，游戏不会再逐波涨价");
++    ImGui::SetNextItemWidth(110.0f * Scale());
++    ImGui::InputInt("金币##sc", &cfg.spinCostValue, 10, 100);
++    Clamp(cfg.spinCostValue, 0, 999999);
++
++    SectionTitle("下一波敌人");
++    ToggleSwitch("自定义每波敌人（含 BOSS）", &cfg.waveEnemyOn,
++                 "开战后按下面的列表生成敌人；逗号分隔，重复写就是多只");
++    static char enemyBuf[256] = {};
++    static std::string lastWaveEnemies;
++    if (cfg.waveEnemies != lastWaveEnemies) {
++        lastWaveEnemies = cfg.waveEnemies;
++        std::snprintf(enemyBuf, sizeof(enemyBuf), "%s", cfg.waveEnemies.c_str());
++    }
++    ImGui::SetNextItemWidth(420.0f * Scale());
++    if (ImGui::InputText("##waveenemies", enemyBuf, sizeof(enemyBuf))) {
++        cfg.waveEnemies = enemyBuf;
++        lastWaveEnemies = cfg.waveEnemies;
++    }
++    ImGui::SameLine();
++    if (ImGui::SmallButton("清空")) {
++        enemyBuf[0] = '\0';
++        cfg.waveEnemies.clear();
++        lastWaveEnemies.clear();
++    }
++
++    auto appendEnemy = [&](const char* key) {
++        std::string s = cfg.waveEnemies;
++        if (!s.empty() && s.back() != ',')
++            s += ',';
++        s += key;
++        cfg.waveEnemies = s;
++        lastWaveEnemies = s;
++        std::snprintf(enemyBuf, sizeof(enemyBuf), "%s", s.c_str());
++    };
++
++    ImGui::TextDisabled("点中文名追加到上面（红色是 BOSS；悬停看游戏内部键名）：");
++    if (ImGui::BeginChild("enemyPicker", ImVec2(0.0f, 170.0f * Scale()))) {
++        int col = 0;
++        for (const EnemyEntry& e : kEnemies) {
++            if (col++ % 3 != 0)
++                ImGui::SameLine();
++            if (e.boss)
++                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.18f, 0.18f, 1.0f));
++            if (ImGui::SmallButton(e.zh))
++                appendEnemy(e.key);
++            if (e.boss)
++                ImGui::PopStyleColor();
++            if (ImGui::IsItemHovered())
++                ImGui::SetTooltip("%s", e.key);
++        }
++        ImGui::EndChild();
++    }
 +
 +    ImGui::EndDisabled();
 +
