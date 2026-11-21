@@ -1,30 +1,32 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index c29eed1..4afc056 100644
+index c29eed1..7b33aee 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -34,6 +34,8 @@ set(APP_SOURCES
+@@ -34,6 +34,9 @@ set(APP_SOURCES
      src/game/items.cpp
      src/game/unitlevel.cpp
      src/game/slotctl.cpp
 +    src/game/unitcap.cpp
 +    src/game/corectl.cpp
++    src/game/battlectl.cpp
      src/ui/overlay.cpp
      src/ui/widgets.cpp
      src/ui/labels.cpp
-@@ -44,6 +46,8 @@ set(APP_SOURCES
+@@ -44,6 +47,9 @@ set(APP_SOURCES
      src/ui/unit_imprints.cpp
      src/ui/unit_awakening.cpp
      src/ui/page_items.cpp
 +    src/ui/page_unitcap.cpp
 +    src/ui/page_core.cpp
++    src/ui/page_battle.cpp
      src/ui/page_slot.cpp
      src/ui/page_system.cpp
  )
 diff --git a/src/app/config.cpp b/src/app/config.cpp
-index 0d6be7a..bbd41cf 100644
+index 0d6be7a..65b8907 100644
 --- a/src/app/config.cpp
 +++ b/src/app/config.cpp
-@@ -102,6 +102,17 @@ bool LoadConfig(const std::wstring& path, Config& cfg)
+@@ -102,6 +102,32 @@ bool LoadConfig(const std::wstring& path, Config& cfg)
      if (cfg.slotSymbol.empty())
          cfg.slotSymbol = "A";
  
@@ -39,10 +41,25 @@ index 0d6be7a..bbd41cf 100644
 +    for (wchar_t c : coreId) // 核心 id 是 ASCII 数字 / 字母
 +        cfg.coreForceId += static_cast<char>(c);
 +
++    cfg.battleSpeedOn = ReadBool(path, L"battle", L"speed_on", cfg.battleSpeedOn);
++    cfg.battleSpeedPct = ReadInt(path, L"battle", L"speed_pct", cfg.battleSpeedPct);
++    cfg.expMulOn = ReadBool(path, L"battle", L"exp_on", cfg.expMulOn);
++    cfg.expMulPct = ReadInt(path, L"battle", L"exp_pct", cfg.expMulPct);
++    cfg.infiniteLives = ReadBool(path, L"battle", L"infinite_lives", cfg.infiniteLives);
++    cfg.infiniteUnitHp = ReadBool(path, L"battle", L"infinite_unit_hp", cfg.infiniteUnitHp);
++    cfg.defensePct = ReadInt(path, L"battle", L"defense_pct", cfg.defensePct);
++    cfg.damageMulOn = ReadBool(path, L"battle", L"damage_on", cfg.damageMulOn);
++    cfg.damageMulPct = ReadInt(path, L"battle", L"damage_pct", cfg.damageMulPct);
++    cfg.oneHitKill = ReadBool(path, L"battle", L"one_hit", cfg.oneHitKill);
++    cfg.lifePointsAdd = ReadInt(path, L"battle", L"life_points_add", cfg.lifePointsAdd);
++    const std::wstring sym = ReadStr(path, L"battle", L"unit_symbol", L"W");
++    cfg.addUnitSymbol = sym.empty() ? "W" : std::string(1, static_cast<char>(sym[0]));
++    cfg.addUnitCount = ReadInt(path, L"battle", L"unit_count", cfg.addUnitCount);
++
      cfg.overlay = ReadBool(path, L"debug", L"overlay", cfg.overlay);
      return true;
  }
-@@ -122,6 +133,12 @@ bool SaveConfig(const std::wstring& path, const Config& cfg)
+@@ -122,6 +148,26 @@ bool SaveConfig(const std::wstring& path, const Config& cfg)
      WriteBool(path, L"slot", L"jackpot", cfg.slotJackpot);
      WriteStr(path, L"slot", L"symbol", std::wstring(cfg.slotSymbol.begin(), cfg.slotSymbol.end()));
  
@@ -52,14 +69,28 @@ index 0d6be7a..bbd41cf 100644
 +    WriteBool(path, L"core", L"guaranteed", cfg.coreGuaranteed);
 +    WriteStr(path, L"core", L"force_id", std::wstring(cfg.coreForceId.begin(), cfg.coreForceId.end()));
 +
++    WriteBool(path, L"battle", L"speed_on", cfg.battleSpeedOn);
++    WriteInt(path, L"battle", L"speed_pct", cfg.battleSpeedPct);
++    WriteBool(path, L"battle", L"exp_on", cfg.expMulOn);
++    WriteInt(path, L"battle", L"exp_pct", cfg.expMulPct);
++    WriteBool(path, L"battle", L"infinite_lives", cfg.infiniteLives);
++    WriteBool(path, L"battle", L"infinite_unit_hp", cfg.infiniteUnitHp);
++    WriteInt(path, L"battle", L"defense_pct", cfg.defensePct);
++    WriteBool(path, L"battle", L"damage_on", cfg.damageMulOn);
++    WriteInt(path, L"battle", L"damage_pct", cfg.damageMulPct);
++    WriteBool(path, L"battle", L"one_hit", cfg.oneHitKill);
++    WriteInt(path, L"battle", L"life_points_add", cfg.lifePointsAdd);
++    WriteStr(path, L"battle", L"unit_symbol", std::wstring(1, static_cast<wchar_t>(cfg.addUnitSymbol.empty() ? 'W' : cfg.addUnitSymbol[0])));
++    WriteInt(path, L"battle", L"unit_count", cfg.addUnitCount);
++
      WriteBool(path, L"debug", L"overlay", cfg.overlay);
  
      // WritePrivateProfileString 有缓存，传全空参数强制落盘
 diff --git a/src/app/config.h b/src/app/config.h
-index 5fa58a0..0be2f6e 100644
+index 5fa58a0..367686b 100644
 --- a/src/app/config.h
 +++ b/src/app/config.h
-@@ -34,6 +34,14 @@ struct Config {
+@@ -34,6 +34,29 @@ struct Config {
      bool slotJackpot = false;        // 大奖模式：每次转都是 9 格同一兵种
      std::string slotSymbol = "A";    // W A S M H D、J（小丑），或 random = 每次随机一种普通兵种
  
@@ -71,9 +102,318 @@ index 5fa58a0..0be2f6e 100644
 +    bool coreGuaranteed = false;  // 核心必出：让指定核心出现在候选第 1 位
 +    std::string coreForceId;      // 指定的核心 id（对应 cores.getById），空 = 不指定
 +
++    // [battle]  战斗 / 成长 / 军团（经 Lua 桥，需要注入）。百分比整数：100 = 1.0 倍
++    bool battleSpeedOn = false;
++    int battleSpeedPct = 100;
++    bool expMulOn = false;
++    int expMulPct = 100;
++    bool infiniteLives = false;   // 生命次数（基地生命）不减
++    bool infiniteUnitHp = false;  // 全队无限生命
++    int defensePct = 0;           // 额外减伤，游戏硬上限 70，所以有效范围 0~70
++    bool damageMulOn = false;
++    int damageMulPct = 100;
++    bool oneHitKill = false;
++    int lifePointsAdd = 1;        // 「增加生命点数」每次加多少
++    std::string addUnitSymbol = "W"; // 军团面板加人：W A S M H D
++    int addUnitCount = 1;
++
      // [debug]
      bool overlay = true; // 左上角状态栏
  
+diff --git a/src/game/battlectl.cpp b/src/game/battlectl.cpp
+new file mode 100644
+index 0000000..900136e
+--- /dev/null
++++ b/src/game/battlectl.cpp
+@@ -0,0 +1,241 @@
++#include "battlectl.h"
++
++#include <windows.h>
++
++#include <string>
++
++#include "luaops.h"
++
++namespace {
++
++using namespace luaops;
++
++// 逐帧生效的开关全部塞进 _G.__sbBattleCfg，包装函数每次现查；关掉透传。
++// 回：状态  1
++constexpr const char* kSyncLua = R"lua(
++local c = rawget(_G, '__sbBattleCfg')
++if type(c) ~= 'table' then c = {}; rawset(_G, '__sbBattleCfg', c) end
++c.speed = SPEED
++c.expMul = EXPMUL
++c.infLives = INFLIVES
++c.infHp = INFHP
++c.defense = DEFENSE
++c.damage = DAMAGE
++c.oneHit = ONEHIT
++
++-- 经验倍率：游戏成长实际是 absorbLV，包装它的成长倍率表
++local K = package.loaded['src.data.constants']
++if type(K) == 'table' and type(K.evolution) == 'table' and type(K.evolution.getAbsorbLvMultipliers) == 'function' then
++  local E = K.evolution
++  local H = rawget(_G, '__sbExpHook')
++  local cur = E.getAbsorbLvMultipliers
++  if type(H) ~= 'table' or H.wrapper ~= cur then
++    local orig = cur
++    H = { orig = orig }
++    H.wrapper = function(...)
++      local r = orig(...)
++      local cfg = rawget(_G, '__sbBattleCfg')
++      local m = cfg and tonumber(cfg.expMul) or 1
++      if type(r) == 'table' and m and m ~= 1 then
++        local v = {}
++        for k, val in pairs(r) do
++          if type(val) == 'number' and val > 1 then v[k] = 1 + (val - 1) * m else v[k] = val end
++        end
++        return v
++      end
++      return r
++    end
++    E.getAbsorbLvMultipliers = H.wrapper
++    rawset(_G, '__sbExpHook', H)
++  end
++end
++
++-- 逐帧生效：包 battlefield.update。换局重建实例时靠 BF ~= self 重新装。
++local bf = rawget(_G, 'battlefield')
++if type(bf) ~= 'table' or type(bf.update) ~= 'function' then return 'nobf\t0' end
++local BH = rawget(_G, '__sbBattleUpdateHook')
++if type(BH) ~= 'table' or BH.bf ~= bf or BH.wrapper ~= bf.update then
++  local orig = bf.update
++  BH = { orig = orig, bf = bf }
++  local function apply(self)
++    local cfg = rawget(_G, '__sbBattleCfg') or {}
++    if cfg.infLives then
++      self.baseDamageBuffer = 0
++      if (tonumber(self.baseHP) or 0) < 9999 then self.baseHP = 9999 end
++      self.suddenDeathWave = false
++      self.gameOver = false
++    end
++    for _, a in ipairs(self.allies or {}) do
++      if type(a) == 'table' then
++        if cfg.infHp then
++          a.hp = a.maxhp or a.hp
++          a.invuln = true
++          a._invulnT = 1e9
++        end
++        local dr = tonumber(cfg.defense) or 0
++        if dr > 0 and (tonumber(a.selfDR) or 0) < dr then a.selfDR = dr end
++        local mul = tonumber(cfg.damage) or 1
++        if mul ~= 1 then
++          local base = a.__sbBaseDmg
++          if type(base) ~= 'number' then base = tonumber(a.dmg) or 0; a.__sbBaseDmg = base end
++          a.dmg = base * mul
++        elseif type(a.__sbBaseDmg) == 'number' then
++          a.dmg = a.__sbBaseDmg
++          a.__sbBaseDmg = nil
++        end
++      end
++    end
++    if cfg.oneHit then
++      for _, e in ipairs(self.enemies or {}) do
++        if type(e) == 'table' then e.hp = 1 end
++      end
++    end
++  end
++  BH.wrapper = function(self, dt, ...)
++    local cfg = rawget(_G, '__sbBattleCfg') or {}
++    local speed = tonumber(cfg.speed) or 1
++    if speed ~= 1 then dt = dt * speed end
++    apply(self)
++    local r = orig(self, dt, ...)
++    apply(self) -- 游戏里有些技能会重置 invuln，orig 之后再补一次
++    return r
++  end
++  bf.update = BH.wrapper
++  rawset(_G, '__sbBattleUpdateHook', BH)
++end
++return 'ok\t1'
++)lua";
++
++constexpr const char* kAddUnitsLua = R"lua(
++local bf = rawget(_G, 'battlefield')
++if type(bf) ~= 'table' or type(bf.spawn) ~= 'function' then return 'nobf' end
++local ok, err = pcall(bf.spawn, bf, SYMBOL, COUNT)
++if not ok then return 'err:' .. tostring(err) end
++return 'ok'
++)lua";
++
++constexpr const char* kRerollShopLua = R"lua(
++local ui = rawget(_G, 'ui')
++if type(ui) ~= 'table' then return 'noui' end
++local I = package.loaded['src.game.item'] or require('src.game.item')
++if type(I) ~= 'table' or type(I.offer) ~= 'function' then return 'noitem' end
++local bf = rawget(_G, 'battlefield')
++local wave = bf and type(bf.wave) == 'table' and tonumber(bf.wave.id) or 1
++local ok, offers = pcall(I.offer, 3, wave, ui._itemPurchased or {})
++if not ok or type(offers) ~= 'table' then return 'nooffers' end
++ui._itemOffers = offers
++ui._itemShopPurchased = {}
++return 'ok'
++)lua";
++
++constexpr const char* kAddLifeLua = R"lua(
++local bf = rawget(_G, 'battlefield')
++if type(bf) ~= 'table' then return 'nobf' end
++bf.baseHP = math.max(0, (tonumber(bf.baseHP) or 0) + N)
++return 'ok'
++)lua";
++
++} // namespace
++
++void BattleControl::OnAction(const bridge::Result& r)
++{
++    if (!r.ok) {
++        error_ = "失败：" + r.text;
++        message_.clear();
++        return;
++    }
++    error_.clear();
++    if (r.text == "ok") {
++        if (pendingAction_ == "add")
++            message_ = "已把单位加入军团（下一帧生效）";
++        else if (pendingAction_ == "reroll")
++            message_ = "商店物品已刷新";
++        else
++            message_ = "生命点数已增加";
++    } else if (r.text == "nobf")
++        error_ = "失败：还没进到一局游戏里";
++    else if (r.text == "noui")
++        error_ = "失败：还没连上游戏界面";
++    else if (r.text == "noitem")
++        error_ = "失败：找不到商店模块";
++    else if (r.text == "nooffers")
++        error_ = "失败：游戏没生成商店物品";
++    else
++        error_ = "失败：" + r.text;
++}
++
++void BattleControl::Update(bool injected, bool speedOn, int speedPct, bool expOn, int expPct,
++                           bool infLives, bool infHp, int defensePct, bool damageOn, int damagePct,
++                           bool oneHit)
++{
++    if (Ready(syncJob_)) {
++        const bridge::Result r = syncJob_.get();
++        if (!r.ok) {
++            error_ = r.text;
++            hooked_ = false;
++        } else {
++            const auto f = Split(r.text, '\t');
++            hooked_ = f[0] == "ok";
++            if (!hooked_)
++                error_ = "还没进到一局游戏（找不到 battlefield）";
++            else
++                error_.clear();
++        }
++    }
++    if (Ready(actionJob_))
++        OnAction(actionJob_.get());
++
++    if (!injected) {
++        hooked_ = false;
++        return;
++    }
++    const bool changed = speedOn != sentSpeedOn_ || speedPct != sentSpeedPct_ || expOn != sentExpOn_ ||
++        expPct != sentExpPct_ || infLives != sentInfLives_ || infHp != sentInfHp_ ||
++        defensePct != sentDefensePct_ || damageOn != sentDamageOn_ || damagePct != sentDamagePct_ ||
++        oneHit != sentOneHit_;
++    const ULONGLONG now = GetTickCount64();
++    if (syncJob_.valid() || (!changed && now - lastSync_ < 500))
++        return;
++    lastSync_ = now;
++    sentSpeedOn_ = speedOn; sentSpeedPct_ = speedPct;
++    sentExpOn_ = expOn; sentExpPct_ = expPct;
++    sentInfLives_ = infLives; sentInfHp_ = infHp;
++    sentDefensePct_ = defensePct;
++    sentDamageOn_ = damageOn; sentDamagePct_ = damagePct;
++    sentOneHit_ = oneHit;
++
++    const std::string prefix =
++        "local SPEED = " + Number(speedOn ? speedPct / 100.0 : 1.0) +
++        "\nlocal EXPMUL = " + Number(expOn ? expPct / 100.0 : 1.0) +
++        "\nlocal INFLIVES = " + (infLives ? "true" : "false") +
++        "\nlocal INFHP = " + (infHp ? "true" : "false") +
++        "\nlocal DEFENSE = " + Number(defensePct / 100.0) +
++        "\nlocal DAMAGE = " + Number(damageOn ? damagePct / 100.0 : 1.0) +
++        "\nlocal ONEHIT = " + (oneHit ? "true" : "false") + "\n";
++    syncJob_ = Run(prefix + kSyncLua);
++}
++
++void BattleControl::AddUnits(const std::string& symbol, int count)
++{
++    if (actionJob_.valid())
++        return;
++    pendingAction_ = "add";
++    const std::string prefix = "local SYMBOL, COUNT = " + Quote(symbol) + ", " + Number(count) + "\n";
++    actionJob_ = Run(prefix + kAddUnitsLua);
++}
++
++void BattleControl::RerollShop()
++{
++    if (actionJob_.valid())
++        return;
++    pendingAction_ = "reroll";
++    actionJob_ = Run(kRerollShopLua);
++}
++
++void BattleControl::AddLifePoints(int n)
++{
++    if (actionJob_.valid())
++        return;
++    pendingAction_ = "life";
++    actionJob_ = Run(std::string("local N = ") + Number(n) + "\n" + kAddLifeLua);
++}
+diff --git a/src/game/battlectl.h b/src/game/battlectl.h
+new file mode 100644
+index 0000000..28b25c5
+--- /dev/null
++++ b/src/game/battlectl.h
+@@ -0,0 +1,41 @@
++#pragma once
++
++#include <future>
++#include <string>
++
++#include "bridge/luaclient.h"
++
++// 战斗控制：经 Lua 桥包装 battlefield.update 与常量模块，一次装好所有逐帧生效的开关。
++// 包装里只读 _G.__sbBattleCfg，关掉就透传；换局重建 battlefield 时每秒自检会重新挂。
++// 加人 / 刷新商店 / 加生命点是一次性动作，不走逐帧包装。
++class BattleControl {
++public:
++    void Update(bool injected, bool speedOn, int speedPct, bool expOn, int expPct,
++                bool infLives, bool infHp, int defensePct, bool damageOn, int damagePct,
++                bool oneHit);
++
++    void AddUnits(const std::string& symbol, int count); // 职业符号 W/A/S/M/H/D + 数量
++    void RerollShop();
++    void AddLifePoints(int n);
++
++    bool Busy() const { return actionJob_.valid(); }
++    bool Hooked() const { return hooked_; }
++    const std::string& Error() const { return error_; }
++    const std::string& Message() const { return message_; }
++
++private:
++    void OnAction(const bridge::Result& r);
++
++    std::future<bridge::Result> syncJob_;
++    std::future<bridge::Result> actionJob_;
++    std::string pendingAction_;
++
++    unsigned long long lastSync_ = 0;
++    bool sentSpeedOn_ = false, sentExpOn_ = false, sentInfLives_ = false, sentInfHp_ = false;
++    bool sentDamageOn_ = false, sentOneHit_ = false;
++    int sentSpeedPct_ = 100, sentExpPct_ = 100, sentDefensePct_ = 0, sentDamagePct_ = 100;
++
++    bool hooked_ = false;
++    std::string error_;
++    std::string message_;
++};
 diff --git a/src/game/corectl.cpp b/src/game/corectl.cpp
 new file mode 100644
 index 0000000..8d5900b
@@ -504,38 +844,46 @@ index 0000000..71130a7
 +    std::string error_;
 +};
 diff --git a/src/ui/menu.cpp b/src/ui/menu.cpp
-index 8934656..a78e8f5 100644
+index 8934656..977b332 100644
 --- a/src/ui/menu.cpp
 +++ b/src/ui/menu.cpp
-@@ -16,8 +16,10 @@ void LuaPages::Update(bool menuOpen, bool injected, const Config& cfg)
+@@ -16,8 +16,16 @@ void LuaPages::Update(bool menuOpen, bool injected, const Config& cfg)
      imprints.Update(ready && shown.unit && shown.imprints);
      awakening.Update(ready && shown.unit && shown.awakening);
      items.Update(ready && shown.items);
 -    // 老虎机控制不管菜单开没开都要保持（每秒检查包装还在不在）
-+    // 老虎机 / 人数上限 / 核心必出不管菜单开没开都要保持（每秒检查包装还在不在）
++    // 老虎机 / 人数上限 / 核心必出 / 战斗强化不管菜单开没开都要保持（每秒检查包装还在不在）
      slot.Update(injected, cfg.enabled && cfg.slotJackpot, cfg.slotSymbol);
 +    unitCap.Update(injected, cfg.enabled && cfg.unitCapEnabled, cfg.unitCap);
 +    core.Update(injected, cfg.enabled && cfg.coreGuaranteed, cfg.coreForceId);
++    battle.Update(injected, cfg.enabled && cfg.battleSpeedOn, cfg.battleSpeedPct,
++                  cfg.enabled && cfg.expMulOn, cfg.expMulPct,
++                  cfg.enabled && cfg.infiniteLives, cfg.enabled && cfg.infiniteUnitHp,
++                  cfg.enabled ? cfg.defensePct : 0,
++                  cfg.enabled && cfg.damageMulOn, cfg.damageMulPct,
++                  cfg.enabled && cfg.oneHitKill);
  }
  
  bool DrawMenu(MenuContext& ctx)
-@@ -38,6 +40,8 @@ bool DrawMenu(MenuContext& ctx)
+@@ -38,6 +46,9 @@ bool DrawMenu(MenuContext& ctx)
      static const Tab kTabs[] = {
          { "资源", [](MenuContext& c) { DrawResourcesPage(c.cfg, c.vars); } },
          { "单位", DrawUnitPage },
 +        { "人数上限", DrawUnitCapPage },
 +        { "核心", DrawCorePage },
++        { "战斗", DrawBattlePage },
          { "物品", DrawItemsPage },
          { "老虎机", DrawSlotPage },
          { "诊断", DrawDiagnosticsPage },
 diff --git a/src/ui/menu.h b/src/ui/menu.h
-index 1e10acd..c3818d8 100644
+index 1e10acd..7ab0e25 100644
 --- a/src/ui/menu.h
 +++ b/src/ui/menu.h
-@@ -11,10 +11,12 @@
+@@ -11,10 +11,13 @@
  #include "core/luavar.h"
  #include "core/process.h"
  #include "game/awakening.h"
++#include "game/battlectl.h"
 +#include "game/corectl.h"
  #include "game/imprints.h"
  #include "game/items.h"
@@ -545,24 +893,127 @@ index 1e10acd..c3818d8 100644
  #include "game/unitlevel.h"
  
  namespace ui {
-@@ -80,6 +82,8 @@ struct ItemsUi {
+@@ -80,6 +83,9 @@ struct ItemsUi {
  struct LuaPages {
      std::string injectError;
      SlotControl slot;
 +    UnitCapControl unitCap;
 +    CoreControl core;
++    BattleControl battle;
      UnitLevelEditor unit;
      OptionEditor options;
      ImprintEditor imprints;
-@@ -94,7 +98,7 @@ struct LuaPages {
+@@ -94,7 +100,7 @@ struct LuaPages {
  
      // 这一帧画了哪几页（画菜单前清零）：只给看得见的页刷新数据
      struct Shown {
 -        bool unit = false, options = false, imprints = false, awakening = false, items = false;
-+        bool unit = false, options = false, imprints = false, awakening = false, items = false, unitcap = false, core = false;
++        bool unit = false, options = false, imprints = false, awakening = false, items = false, unitcap = false, core = false, battle = false;
      } shown;
  
      // 每帧画菜单之前调用。menuOpen / injected 决定要不要去游戏里读数据
+diff --git a/src/ui/page_battle.cpp b/src/ui/page_battle.cpp
+new file mode 100644
+index 0000000..560a166
+--- /dev/null
++++ b/src/ui/page_battle.cpp
+@@ -0,0 +1,96 @@
++// 「战斗」页：游戏速度、军团加人、商店刷新、成长倍率、生命与战斗强化
++
++#include <algorithm>
++#include <string>
++
++#include "labels.h"
++#include "pages.h"
++#include "widgets.h"
++
++namespace ui {
++
++namespace {
++
++void Clamp(int& v, int lo, int hi) { v = std::max(lo, std::min(hi, v)); }
++
++void PercentInput(const char* label, int& pct, int lo, int hi, const char* tip)
++{
++    ImGui::SetNextItemWidth(110.0f * Scale());
++    ImGui::InputInt(label, &pct, 10, 100);
++    Clamp(pct, lo, hi);
++    ImGui::SameLine();
++    ImGui::TextDisabled("%d%%", pct);
++    if (tip)
++        ImGui::SetItemTooltip("%s", tip);
++}
++
++} // namespace
++
++void DrawBattlePage(MenuContext& ctx)
++{
++    if (!DrawBridgeBar(ctx, "战斗"))
++        return;
++    ctx.pages.shown.battle = true;
++
++    BattleControl& battle = ctx.pages.battle;
++    Config& cfg = ctx.cfg;
++    ErrorText(battle.Error());
++    HintText(battle.Message());
++    if (!battle.Hooked())
++        ImGui::TextDisabled("正在连接战斗…（先进一局游戏）");
++
++    ImGui::BeginDisabled(battle.Busy());
++
++    SectionTitle("游戏速度");
++    ToggleSwitch("加速战斗 / 全局", &cfg.battleSpeedOn, "只改游戏收到的 dt，不改游戏文件；关掉恢复正常速度");
++    PercentInput("速度##sp", cfg.battleSpeedPct, 10, 500, "100% = 原速；500% = 5 倍");
++
++    SectionTitle("军团面板");
++    ImGui::TextDisabled("兵种：");
++    for (const char* s = "WASMHD"; *s; ++s) {
++        SameLineIfFits("兵种");
++        if (ImGui::RadioButton(SlotSymbolName(*s), cfg.addUnitSymbol.size() == 1 && cfg.addUnitSymbol[0] == *s))
++            cfg.addUnitSymbol = std::string(1, *s);
++    }
++    ImGui::SetNextItemWidth(90.0f * Scale());
++    ImGui::InputInt("数量##uc", &cfg.addUnitCount, 1, 5);
++    Clamp(cfg.addUnitCount, 1, 99);
++    ImGui::SameLine();
++    if (ImGui::Button("加入军团"))
++        battle.AddUnits(cfg.addUnitSymbol, cfg.addUnitCount);
++    ImGui::TextDisabled("走游戏自己的 battlefield:spawn，下一帧单位就会出现在队伍里");
++
++    SectionTitle("商店");
++    if (ImGui::Button("刷新商店物品"))
++        battle.RerollShop();
++    ImGui::SameLine();
++    ImGui::TextDisabled("重新抽 3 件商品，已购列表不变");
++
++    SectionTitle("成长 / 经验");
++    ToggleSwitch("全队经验倍率", &cfg.expMulOn, "游戏实际靠吸收涨级，这里放大吸收带来的属性成长");
++    PercentInput("倍率##ex", cfg.expMulPct, 100, 1000, "100% = 原版；500% = 吸收成长 ×5");
++
++    SectionTitle("生命");
++    ToggleSwitch("无限生命次数", &cfg.infiniteLives, "基地生命不减，同时挡住审判 / BOSS 波的直接判负");
++    ToggleSwitch("全队无限生命", &cfg.infiniteUnitHp, "战斗中友军血量每帧回满并免疫伤害");
++    ImGui::SetNextItemWidth(110.0f * Scale());
++    ImGui::InputInt("增加生命点数##lp", &cfg.lifePointsAdd, 1, 10);
++    Clamp(cfg.lifePointsAdd, 1, 9999);
++    ImGui::SameLine();
++    if (ImGui::Button("应用"))
++        battle.AddLifePoints(cfg.lifePointsAdd);
++
++    SectionTitle("战斗强化");
++    PercentInput("防御##df", cfg.defensePct, 0, 70, "额外减伤；游戏内部硬上限 70%");
++    ToggleSwitch("全队伤害倍率", &cfg.damageMulOn, "按缓存的原始伤害乘倍率，关掉会还原");
++    PercentInput("倍率##dm", cfg.damageMulPct, 100, 10000, "100% = 原版；1000% = 10 倍");
++    ToggleSwitch("一击必杀", &cfg.oneHitKill, "每帧把敌人血量压到 1；下一击即可击杀");
++
++    ImGui::EndDisabled();
++
++    ImGui::Spacing();
++    ImGui::TextWrapped("这些开关都是纯内存 Lua 包装：每局换图 / 重开游戏会自动重新挂上，"
++                       "关掉或修改器没开时走游戏原版逻辑。游戏更新后若字段名变了，页面会提示连不上。");
++}
++
++} // namespace ui
 diff --git a/src/ui/page_core.cpp b/src/ui/page_core.cpp
 new file mode 100644
 index 0000000..ec4436f
@@ -668,7 +1119,7 @@ index 0000000..ec4436f
 +
 +} // namespace ui
 diff --git a/src/ui/page_unit.cpp b/src/ui/page_unit.cpp
-index d8422dd..bdaeb5f 100644
+index d8422dd..060177a 100644
 --- a/src/ui/page_unit.cpp
 +++ b/src/ui/page_unit.cpp
 @@ -304,7 +304,7 @@ bool DrawBridgeBar(const MenuContext& ctx, const char* feature)
@@ -676,7 +1127,7 @@ index d8422dd..bdaeb5f 100644
          ImGui::TextWrapped("改%s要在游戏里执行 Lua，需要先把 slotbound_lua.dll 注入游戏。"
                             "它只改 love.dll 导入表里的一个函数指针，不改游戏文件，点「卸载注入」或游戏退出就没了。", feature);
 -        if (ImGui::Button("注入（启用单位 / 物品 / 老虎机功能）")) {
-+        if (ImGui::Button("注入（启用单位 / 物品 / 老虎机 / 人数上限 / 核心功能）")) {
++        if (ImGui::Button("注入（启用单位 / 物品 / 老虎机 / 人数上限 / 核心 / 战斗功能）")) {
              injectError.clear();
              // DLL 内嵌在修改器 exe 里，先释放到 %LOCALAPPDATA%\slotbound-trainer\ 再注入
              const std::wstring dll = bridge::ExtractEmbeddedDll(injectError);
@@ -743,24 +1194,26 @@ index 0000000..bd41d2f
 +
 +} // namespace ui
 diff --git a/src/ui/pages.h b/src/ui/pages.h
-index ff1017e..3637ffd 100644
+index ff1017e..461ef82 100644
 --- a/src/ui/pages.h
 +++ b/src/ui/pages.h
-@@ -4,6 +4,8 @@
+@@ -4,6 +4,9 @@
  //   page_resources.cpp  资源（金币 / 旋转 / 水晶）+ 状态栏
  //   page_unit.cpp       单位：等级、属性、技能；下挂 unit_options / unit_imprints / unit_awakening 三个子页
  //   page_items.cpp      物品
 +//   page_unitcap.cpp    人数上限
 +//   page_core.cpp       核心：强制选择页 / 核心必出
++//   page_battle.cpp     战斗：速度 / 军团 / 商店 / 成长 / 生命 / 伤害
  //   page_slot.cpp       老虎机
  //   page_system.cpp     诊断、设置
  
-@@ -26,6 +28,8 @@ void DrawImprintsBody(ImprintEditor& editor, ImprintsUi& ui);
+@@ -26,6 +29,9 @@ void DrawImprintsBody(ImprintEditor& editor, ImprintsUi& ui);
  void DrawAwakeningBody(AwakeningEditor& editor, AwakeningUi& ui);
  
  void DrawItemsPage(MenuContext& ctx);
 +void DrawUnitCapPage(MenuContext& ctx);
 +void DrawCorePage(MenuContext& ctx);
++void DrawBattlePage(MenuContext& ctx);
  void DrawSlotPage(MenuContext& ctx);
  void DrawDiagnosticsPage(MenuContext& ctx);
  void DrawSettingsPage(MenuContext& ctx);
