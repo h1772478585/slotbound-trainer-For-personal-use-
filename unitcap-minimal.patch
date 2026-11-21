@@ -1879,7 +1879,7 @@ index 0000000..23e37a4
 +
 +} // namespace ui
 diff --git a/src/ui/page_system.cpp b/src/ui/page_system.cpp
-index 8a5d574..2c7bd70 100644
+index 8a5d574..e233fa7 100644
 --- a/src/ui/page_system.cpp
 +++ b/src/ui/page_system.cpp
 @@ -1,5 +1,7 @@
@@ -1943,7 +1943,7 @@ index 8a5d574..2c7bd70 100644
 +scan(_G, 0)
 +for _, m in pairs(package.loaded) do scan(m, 0) end
 +table.sort(out)
-+if #out > 400 then while #out > 400 do table.remove(out) end end
++if #out > 2000 then while #out > 2000 do table.remove(out) end end
 +return #out .. ' 条\n' .. table.concat(out, '\n')
 +)lua");
 +    ImGui::SameLine();
@@ -1965,7 +1965,7 @@ index 8a5d574..2c7bd70 100644
 +scan(_G, 0)
 +for _, m in pairs(package.loaded) do scan(m, 0) end
 +table.sort(out)
-+if #out > 300 then while #out > 300 do table.remove(out) end end
++if #out > 1000 then while #out > 1000 do table.remove(out) end end
 +return #out .. ' 条\n' .. table.concat(out, '\n')
 +)lua");
 +
