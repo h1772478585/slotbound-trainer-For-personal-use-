@@ -1,0 +1,23 @@
+name: build unitcap
+
+on: push
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply unitcap patch
+        run: git apply unitcap-minimal.patch
+
+      - name: Build portable
+        shell: pwsh
+        run: ./build.ps1 -Dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: slotbound-trainer-unitcap
+          path: dist/slotbound_trainer.exe
+          if-no-files-found: error
