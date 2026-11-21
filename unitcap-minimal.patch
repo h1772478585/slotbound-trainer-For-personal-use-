@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index c29eed1..3991987 100644
+index c29eed1..c845320 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -34,6 +34,10 @@ set(APP_SOURCES
@@ -13,13 +13,14 @@ index c29eed1..3991987 100644
      src/ui/overlay.cpp
      src/ui/widgets.cpp
      src/ui/labels.cpp
-@@ -44,6 +48,10 @@ set(APP_SOURCES
+@@ -44,6 +48,11 @@ set(APP_SOURCES
      src/ui/unit_imprints.cpp
      src/ui/unit_awakening.cpp
      src/ui/page_items.cpp
 +    src/ui/page_unitcap.cpp
 +    src/ui/page_core.cpp
 +    src/ui/page_battle.cpp
++    src/ui/page_enemy.cpp
 +    src/ui/page_odds.cpp
      src/ui/page_slot.cpp
      src/ui/page_system.cpp
@@ -1357,7 +1358,7 @@ index 0000000..71130a7
 +    std::string error_;
 +};
 diff --git a/src/ui/menu.cpp b/src/ui/menu.cpp
-index 8934656..fc35651 100644
+index 8934656..f0fa0c0 100644
 --- a/src/ui/menu.cpp
 +++ b/src/ui/menu.cpp
 @@ -2,6 +2,7 @@
@@ -1419,19 +1420,20 @@ index 8934656..fc35651 100644
  }
  
  bool DrawMenu(MenuContext& ctx)
-@@ -38,6 +73,10 @@ bool DrawMenu(MenuContext& ctx)
+@@ -38,6 +73,11 @@ bool DrawMenu(MenuContext& ctx)
      static const Tab kTabs[] = {
          { "资源", [](MenuContext& c) { DrawResourcesPage(c.cfg, c.vars); } },
          { "单位", DrawUnitPage },
 +        { "人数上限", DrawUnitCapPage },
 +        { "核心", DrawCorePage },
 +        { "战斗", DrawBattlePage },
++        { "敌人", DrawEnemyPage },
 +        { "概率", DrawOddsPage },
          { "物品", DrawItemsPage },
          { "老虎机", DrawSlotPage },
          { "诊断", DrawDiagnosticsPage },
 diff --git a/src/ui/menu.h b/src/ui/menu.h
-index 1e10acd..ced2c2a 100644
+index 1e10acd..8467e42 100644
 --- a/src/ui/menu.h
 +++ b/src/ui/menu.h
 @@ -2,6 +2,7 @@
@@ -1473,7 +1475,7 @@ index 1e10acd..ced2c2a 100644
      // 这一帧画了哪几页（画菜单前清零）：只给看得见的页刷新数据
      struct Shown {
 -        bool unit = false, options = false, imprints = false, awakening = false, items = false;
-+        bool unit = false, options = false, imprints = false, awakening = false, items = false, unitcap = false, core = false, battle = false, odds = false;
++        bool unit = false, options = false, imprints = false, awakening = false, items = false, unitcap = false, core = false, battle = false, odds = false, enemy = false;
      } shown;
  
      // 每帧画菜单之前调用。menuOpen / injected 决定要不要去游戏里读数据
@@ -1491,15 +1493,13 @@ index 1e10acd..ced2c2a 100644
  // 画菜单要用到的东西
 diff --git a/src/ui/page_battle.cpp b/src/ui/page_battle.cpp
 new file mode 100644
-index 0000000..6a358f4
+index 0000000..e87502f
 --- /dev/null
 +++ b/src/ui/page_battle.cpp
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,118 @@
 +// 「战斗」页：游戏速度、军团加人、商店刷新、成长倍率、生命与战斗强化
 +
 +#include <algorithm>
-+#include <cstdio>
-+#include <string>
 +
 +#include "labels.h"
 +#include "pages.h"
@@ -1510,34 +1510,6 @@ index 0000000..6a358f4
 +namespace {
 +
 +void Clamp(int& v, int lo, int hi) { v = std::max(lo, std::min(hi, v)); }
-+
-+struct EnemyEntry {
-+    const char* key;
-+    const char* zh;
-+    bool boss;
-+};
-+
-+// 游戏 battlefield 里实际认的敌人键名 + 中文名；带 boss 的是 BOSS
-+static const EnemyEntry kEnemies[] = {
-+    { "Goblin", "哥布林", false }, { "GoblinThief", "哥布林盗贼", false },
-+    { "Orc", "兽人", false }, { "Orc Axe Raider", "兽人斧袭者", false },
-+    { "Orc Veteran", "兽人老兵", false }, { "Charge Orc", "冲锋兽人", false },
-+    { "Orc War Chief", "兽人酋长", false }, { "Wolf", "狼", false },
-+    { "Eye Crawler", "眼虫", false }, { "Eye Bat", "眼蝠", false },
-+    { "Stinger Bat", "毒针蝠", false }, { "Deceiver", "欺瞒者", false },
-+    { "Cave Brute", "洞穴怪兽", false }, { "Observer", "观察者", false },
-+    { "Canyon Raptor", "峡谷迅猛龙", false }, { "Lizard Hunter", "蜥蜴猎手", false },
-+    { "Firebreather", "喷火者", false }, { "Axe Lizard", "斧蜥蜴", false },
-+    { "Dust Hyena", "沙鬣狗", false }, { "Gnoll Archer", "豺狼弓手", false },
-+    { "Shield Gnoll", "盾豺狼", false }, { "Wasteland Warrior", "荒野战士", false },
-+    { "Blood Assassin", "血色刺客", false }, { "Gnoll Berserker", "豺狼狂战士", false },
-+    { "Cackle Shaman", "狂笑萨满", false }, { "Pack Chief", "群落首领", false },
-+    { "Bat Matron", "蝠群母巢", false }, { "Gazer", "凝视者", false },
-+    { "Goblin Rider", "哥布林骑手", false }, { "Warg Orc", "座狼兽人", false },
-+    { "Orc Berserker", "兽人狂战士", false }, { "Beholder", "百眼王（BOSS）", true },
-+    { "Grimwolf Orc", "幽狼兽人（BOSS）", true }, { "Howl Orc", "嚎叫兽人（BOSS）", true },
-+    { "Orc Arch Shaman", "兽人大萨满（BOSS）", true },
-+};
 +
 +void PercentInput(const char* label, int& pct, int lo, int hi, const char* tip)
 +{
@@ -1634,67 +1606,6 @@ index 0000000..6a358f4
 +    ImGui::SetNextItemWidth(110.0f * Scale());
 +    ImGui::InputInt("金币##sc", &cfg.spinCostValue, 10, 100);
 +    Clamp(cfg.spinCostValue, 0, 999999);
-+
-+    SectionTitle("下一波敌人");
-+    ToggleSwitch("自定义每波敌人（含 BOSS）", &cfg.waveEnemyOn,
-+                 "开战后按下面的列表生成敌人；逗号分隔，重复写就是多只");
-+    static char enemyBuf[256] = {};
-+    static std::string lastWaveEnemies;
-+    if (cfg.waveEnemies != lastWaveEnemies) {
-+        lastWaveEnemies = cfg.waveEnemies;
-+        std::snprintf(enemyBuf, sizeof(enemyBuf), "%s", cfg.waveEnemies.c_str());
-+    }
-+    ImGui::SetNextItemWidth(420.0f * Scale());
-+    if (ImGui::InputText("##waveenemies", enemyBuf, sizeof(enemyBuf))) {
-+        cfg.waveEnemies = enemyBuf;
-+        lastWaveEnemies = cfg.waveEnemies;
-+    }
-+    ImGui::SameLine();
-+    if (ImGui::SmallButton("清空")) {
-+        enemyBuf[0] = '\0';
-+        cfg.waveEnemies.clear();
-+        lastWaveEnemies.clear();
-+    }
-+
-+    auto appendEnemy = [&](const char* key) {
-+        std::string s = cfg.waveEnemies;
-+        if (!s.empty() && s.back() != ',')
-+            s += ',';
-+        s += key;
-+        cfg.waveEnemies = s;
-+        lastWaveEnemies = s;
-+        std::snprintf(enemyBuf, sizeof(enemyBuf), "%s", s.c_str());
-+    };
-+
-+    ImGui::TextDisabled("点中文名追加到上面（红色是 BOSS；悬停看内部键名）。共 35 种，可上下滚动：");
-+    // BeginChild 即使返回 false 也必须 EndChild，否则 ImGui 窗口栈错乱
-+    ImGui::BeginChild("enemyPicker", ImVec2(0.0f, 260.0f * Scale()));
-+    int col = 0;
-+    for (const EnemyEntry& e : kEnemies) {
-+        if (col++ % 3 != 0)
-+            ImGui::SameLine();
-+        if (e.boss)
-+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.18f, 0.18f, 1.0f));
-+        if (ImGui::SmallButton(e.zh))
-+            appendEnemy(e.key);
-+        if (e.boss)
-+            ImGui::PopStyleColor();
-+        if (ImGui::IsItemHovered())
-+            ImGui::SetTooltip("%s", e.key);
-+    }
-+    ImGui::EndChild();
-+
-+    ToggleSwitch("强制每波敌人数量", &cfg.enemyCountOn,
-+                 "按上面选中的敌人循环生成，填几就出几只；没选敌人时默认用哥布林");
-+    ImGui::SetNextItemWidth(100.0f * Scale());
-+    ImGui::InputInt("敌人数量##ec", &cfg.enemyCountValue, 1, 5);
-+    Clamp(cfg.enemyCountValue, 1, 200);
-+
-+    ToggleSwitch("强制当前波数", &cfg.waveNumberOn,
-+                 "把 battlefield.wave.id 改成填的值；填 10 的倍数会变成 BOSS 波，5 的倍数会变成审判波");
-+    ImGui::SetNextItemWidth(100.0f * Scale());
-+    ImGui::InputInt("波数##wn", &cfg.waveNumberValue, 1, 10);
-+    Clamp(cfg.waveNumberValue, 0, 9999);
 +
 +    ImGui::EndDisabled();
 +
@@ -1805,6 +1716,193 @@ index 0000000..ec4436f
 +    ImGui::TextWrapped("原理：包装 src.game.cores.offer，把选中的核心放到候选第 1 位；"
 +                       "强制页则直接构造 ui._coreSelect。两者独立，不改存档、不动游戏文件，"
 +                       "关掉或修改器没开时都是原版行为。核心名从游戏内读取，版本不同可能读不到。");
++}
++
++} // namespace ui
+diff --git a/src/ui/page_enemy.cpp b/src/ui/page_enemy.cpp
+new file mode 100644
+index 0000000..5fca947
+--- /dev/null
++++ b/src/ui/page_enemy.cpp
+@@ -0,0 +1,181 @@
++// 「敌人」页：下一波敌人、数量、波数；按六张地图分组的中文敌人按钮
++
++#include <cstdio>
++#include <string>
++
++#include "pages.h"
++#include "widgets.h"
++
++namespace ui {
++
++namespace {
++
++struct EnemyEntry {
++    const char* key;
++    const char* zh;
++    bool boss;
++};
++
++// 键名取自游戏内部定义，中文名取自游戏语言表（简体中文），BOSS 在截图里有标注
++static const EnemyEntry kOpenForest[] = {
++    { "Goblin", "哥布林", false }, { "GoblinThief", "哥布林盗贼", false },
++    { "Orc", "兽人", false }, { "Orc Axe Raider", "兽人斧袭者", false },
++    { "Wolf", "狼", false }, { "Charge Orc", "冲锋兽人", false },
++    { "Goblin Rider", "哥布林骑手", false }, { "Warg Orc", "座狼兽人", false },
++    { "Orc War Chief", "兽人酋长", false }, { "Orc Berserker", "兽人狂战士", false },
++    { "Orc Veteran", "兽人老兵", false }, { "Grimwolf Orc", "幽狼兽人（BOSS）", true },
++    { "Howl Orc", "嚎叫兽人（BOSS）", true }, { "Orc Arch Shaman", "兽人大萨满（BOSS）", true },
++};
++
++static const EnemyEntry kDeepCave[] = {
++    { "Eye Crawler", "眼虫", false }, { "Observer", "观察者", false },
++    { "Eye Bat", "眼蝠", false }, { "Gazer", "凝视者", false },
++    { "Stinger Bat", "毒针蝠", false }, { "Deceiver", "欺瞒者", false },
++    { "Bat Matron", "蝠母", false }, { "Cave Brute", "洞穴怪兽", false },
++    { "Eye Warlock", "眼球术士", false }, { "Cave Devourer", "洞穴吞噬者", false },
++    { "Beholder", "百眼王（BOSS）", true }, { "Venom Maw", "剧毒巨口（BOSS）", true },
++    { "Cave Basilisk", "洞窟蛇怪（BOSS）", true },
++};
++
++static const EnemyEntry kWasteland[] = {
++    { "Dust Hyena", "枯瘦鬣狗", false }, { "Gnoll Archer", "豺狼人弓手", false },
++    { "Shield Gnoll", "持盾豺狼人", false }, { "Wasteland Warrior", "荒原战士", false },
++    { "Blood Assassin", "嗜血刺客", false }, { "Gnoll Berserker", "豺狼人狂战士", false },
++    { "Cackle Shaman", "狂笑萨满", false }, { "Pack Chief", "荒原战酋", false },
++    { "Dunefang", "荒野剑齿兽（BOSS）", true }, { "Bloodtail", "血尾（BOSS）", true },
++    { "Wasteland Piper", "荒野吹笛者（BOSS）", true },
++};
++
++static const EnemyEntry kLostRuins[] = {
++    { "Canyon Raptor", "峡谷迅猛龙", false }, { "Axe Lizard", "持斧蜥蜴", false },
++    { "Lizard Hunter", "蜥蜴猎手", false }, { "Firebreather", "喷火蜥蜴", false },
++    { "Lizard Guard", "蜥蜴守卫", false }, { "Lizard Brute", "巨型蜥蜴", false },
++    { "Lizard Shaman", "蜥蜴萨满", false }, { "Greatsword Rider", "巨剑骑手", false },
++    { "Crimson Raptor", "猩红迅猛龙", false }, { "Lizard Warlord", "蜥蜴军阀（BOSS）", true },
++    { "Dragonkin Shaman", "龙血萨满（BOSS）", true }, { "Spine Tyrant", "逆棘暴君（BOSS）", true },
++    { "Razorscale Elder", "刃鳞长老（BOSS）", true },
++};
++
++static const EnemyEntry kCrimsonHell[] = {
++    { "Imp", "小恶魔", false }, { "Ember Imp", "余烬小恶魔", false },
++    { "Rascal Imp", "顽皮小恶魔", false }, { "Succubus", "魅魔", false },
++    { "Clawed Demon", "利爪恶魔", false }, { "High Demon", "高阶恶魔", false },
++    { "Hell Warden", "地狱守卫", false }, { "Hell Witch", "地狱女巫", false },
++    { "Hell Enforcer", "地狱行刑者", false }, { "Demon Lord", "魔王", false },
++    { "Dark Lord", "黑暗君主（BOSS）", true }, { "Skeleton Dragon", "骷髅龙（BOSS）", true },
++    { "Doom Dragon", "毁灭龙（BOSS）", true },
++};
++
++static const EnemyEntry kSplitSpace[] = {
++    { "Space Assassin", "宇宙刺客", false }, { "Space Guardian", "宇宙守护者", false },
++    { "Space Hunter", "宇宙猎手", false }, { "Space Knight", "宇宙骑士", false },
++    { "Space Cavalry", "宇宙骑兵", false }, { "Space Wizard", "宇宙法师", false },
++    { "Crescent Raider", "新月掠夺者", false }, { "Crystal Guard", "水晶近卫", false },
++    { "Starlight Paladin", "星光圣骑士", false }, { "Star Priestess", "群星女祭司", false },
++    { "Twin Star Lords", "双星君主（BOSS）", true }, { "Star Judge", "群星审判官（BOSS）", true },
++    { "Cosmic Sovereign", "宇宙帝王（BOSS）", true },
++};
++
++struct EnemyGroup {
++    const char* title;
++    const EnemyEntry* items;
++    int count;
++};
++
++static const EnemyGroup kGroups[] = {
++    { "开阔森林 Open Forest（14）", kOpenForest, static_cast<int>(sizeof(kOpenForest) / sizeof(kOpenForest[0])) },
++    { "深邃洞窟 Deep Cave（13）", kDeepCave, static_cast<int>(sizeof(kDeepCave) / sizeof(kDeepCave[0])) },
++    { "荒原 Wasteland（11）", kWasteland, static_cast<int>(sizeof(kWasteland) / sizeof(kWasteland[0])) },
++    { "失落遗迹 Lost Ruins（13）", kLostRuins, static_cast<int>(sizeof(kLostRuins) / sizeof(kLostRuins[0])) },
++    { "猩红地狱 Crimson Hell（13）", kCrimsonHell, static_cast<int>(sizeof(kCrimsonHell) / sizeof(kCrimsonHell[0])) },
++    { "冰冷宇宙 Split Space（13）", kSplitSpace, static_cast<int>(sizeof(kSplitSpace) / sizeof(kSplitSpace[0])) },
++};
++
++void DrawGroup(const EnemyGroup& g, int index, std::string& cfgValue, std::string& lastValue, char* buf, size_t bufSize)
++{
++    SectionTitle(g.title);
++    ImGui::BeginChild(g.title, ImVec2(0.0f, 150.0f * Scale()));
++    int col = 0;
++    for (int i = 0; i < g.count; ++i) {
++        const EnemyEntry& e = g.items[i];
++        if (col++ % 3 != 0)
++            ImGui::SameLine();
++        if (e.boss)
++            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.18f, 0.18f, 1.0f));
++        if (ImGui::SmallButton(e.zh)) {
++            std::string s = cfgValue;
++            if (!s.empty() && s.back() != ',')
++                s += ',';
++            s += e.key;
++            cfgValue = s;
++            lastValue = s;
++            std::snprintf(buf, bufSize, "%s", s.c_str());
++        }
++        if (e.boss)
++            ImGui::PopStyleColor();
++        if (ImGui::IsItemHovered())
++            ImGui::SetTooltip("%s", e.key);
++    }
++    ImGui::EndChild();
++    (void)index;
++}
++
++} // namespace
++
++void DrawEnemyPage(MenuContext& ctx)
++{
++    if (!DrawBridgeBar(ctx, "敌人"))
++        return;
++    ctx.pages.shown.enemy = true;
++
++    BattleControl& battle = ctx.pages.battle;
++    Config& cfg = ctx.cfg;
++    ErrorText(battle.Error());
++    HintText(battle.Message());
++
++    SectionTitle("波次控制");
++    ToggleSwitch("自定义每波敌人（含 BOSS）", &cfg.waveEnemyOn,
++                 "开战后按下面的列表生成敌人；逗号分隔，重复写就是多只");
++    static char enemyBuf[256] = {};
++    static std::string lastWaveEnemies;
++    if (cfg.waveEnemies != lastWaveEnemies) {
++        lastWaveEnemies = cfg.waveEnemies;
++        std::snprintf(enemyBuf, sizeof(enemyBuf), "%s", cfg.waveEnemies.c_str());
++    }
++    ImGui::SetNextItemWidth(420.0f * Scale());
++    if (ImGui::InputText("##waveenemies", enemyBuf, sizeof(enemyBuf))) {
++        cfg.waveEnemies = enemyBuf;
++        lastWaveEnemies = cfg.waveEnemies;
++    }
++    ImGui::SameLine();
++    if (ImGui::SmallButton("清空")) {
++        enemyBuf[0] = '\0';
++        cfg.waveEnemies.clear();
++        lastWaveEnemies.clear();
++    }
++
++    ToggleSwitch("强制每波敌人数量", &cfg.enemyCountOn,
++                 "按上面选中的敌人循环生成，填几就出几只；没选敌人时默认用哥布林");
++    ImGui::SetNextItemWidth(100.0f * Scale());
++    ImGui::InputInt("敌人数量##ec", &cfg.enemyCountValue, 1, 5);
++    if (cfg.enemyCountValue < 1)
++        cfg.enemyCountValue = 1;
++    if (cfg.enemyCountValue > 200)
++        cfg.enemyCountValue = 200;
++
++    ToggleSwitch("强制当前波数", &cfg.waveNumberOn,
++                 "把 battlefield.wave.id 改成填的值；10 的倍数会变成 BOSS 波，5 的倍数会变成审判波");
++    ImGui::SetNextItemWidth(100.0f * Scale());
++    ImGui::InputInt("波数##wn", &cfg.waveNumberValue, 1, 10);
++    if (cfg.waveNumberValue < 0)
++        cfg.waveNumberValue = 0;
++    if (cfg.waveNumberValue > 9999)
++        cfg.waveNumberValue = 9999;
++
++    SectionTitle("敌人列表（按地图）");
++    ImGui::TextDisabled("点中文名追加到上面的输入框（红色是 BOSS；悬停看内部键名）：");
++    for (int i = 0; i < static_cast<int>(sizeof(kGroups) / sizeof(kGroups[0])); ++i)
++        DrawGroup(kGroups[i], i, cfg.waveEnemies, lastWaveEnemies, enemyBuf, sizeof(enemyBuf));
 +}
 +
 +} // namespace ui
@@ -2054,27 +2152,29 @@ index 0000000..bd41d2f
 +
 +} // namespace ui
 diff --git a/src/ui/pages.h b/src/ui/pages.h
-index ff1017e..d764fb7 100644
+index ff1017e..d7c77dd 100644
 --- a/src/ui/pages.h
 +++ b/src/ui/pages.h
-@@ -4,6 +4,10 @@
+@@ -4,6 +4,11 @@
  //   page_resources.cpp  资源（金币 / 旋转 / 水晶）+ 状态栏
  //   page_unit.cpp       单位：等级、属性、技能；下挂 unit_options / unit_imprints / unit_awakening 三个子页
  //   page_items.cpp      物品
 +//   page_unitcap.cpp    人数上限
 +//   page_core.cpp       核心：强制选择页 / 核心必出
-+//   page_battle.cpp     战斗：速度 / 军团 / 商店 / 成长 / 生命 / 伤害
++//   page_battle.cpp     战斗：速度 / 军团 / 商店 / 成长 / 生命 / 伤害 / 容量
++//   page_enemy.cpp      敌人：下一波敌人 / 数量 / 波数，按六张地图分组
 +//   page_odds.cpp       概率：稀有度 / 符号
  //   page_slot.cpp       老虎机
  //   page_system.cpp     诊断、设置
  
-@@ -26,6 +30,10 @@ void DrawImprintsBody(ImprintEditor& editor, ImprintsUi& ui);
+@@ -26,6 +31,11 @@ void DrawImprintsBody(ImprintEditor& editor, ImprintsUi& ui);
  void DrawAwakeningBody(AwakeningEditor& editor, AwakeningUi& ui);
  
  void DrawItemsPage(MenuContext& ctx);
 +void DrawUnitCapPage(MenuContext& ctx);
 +void DrawCorePage(MenuContext& ctx);
 +void DrawBattlePage(MenuContext& ctx);
++void DrawEnemyPage(MenuContext& ctx);
 +void DrawOddsPage(MenuContext& ctx);
  void DrawSlotPage(MenuContext& ctx);
  void DrawDiagnosticsPage(MenuContext& ctx);
