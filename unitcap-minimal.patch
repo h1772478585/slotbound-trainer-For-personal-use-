@@ -984,7 +984,7 @@ index 0000000..ea43050
 +};
 diff --git a/src/game/oddsctl.cpp b/src/game/oddsctl.cpp
 new file mode 100644
-index 0000000..b88c439
+index 0000000..1d70669
 --- /dev/null
 +++ b/src/game/oddsctl.cpp
 @@ -0,0 +1,197 @@
@@ -1165,7 +1165,7 @@ index 0000000..b88c439
 +        return;
 +    }
 +    char buf[512];
-+    std::snprintf(buf, sizeof(buf), "%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f",
++    std::snprintf(buf, sizeof(buf), "%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f|%.1f",
 +                  rarityOn ? 1.0 : 0.0, rarityNormal, rarityAdvanced, rarityRare, rarityLegendary, rarityPrism,
 +                  symbolOn ? 1.0 : 0.0, w, a, s, h, m, d, joker);
 +    const std::string sig = buf;
@@ -1364,7 +1364,7 @@ index 0000000..71130a7
 +};
 diff --git a/src/game/unitplanner.cpp b/src/game/unitplanner.cpp
 new file mode 100644
-index 0000000..4072697
+index 0000000..b688f67
 --- /dev/null
 +++ b/src/game/unitplanner.cpp
 @@ -0,0 +1,190 @@
@@ -1441,7 +1441,7 @@ index 0000000..4072697
 +{
 +    if (Busy() || rows_.empty())
 +        return;
-+    std::string code = kDeepCopy + R"lua(
++    std::string code = std::string(kDeepCopy) + R"lua(
 +local bf = rawget(_G, 'battlefield')
 +if type(bf) ~= 'table' then return '还没进到一局游戏' end
 +local f = rawget(_G, '__slotSetAwakeningLevel')
@@ -1482,7 +1482,7 @@ index 0000000..4072697
 +{
 +    if (Busy() || sourceIndex < 0)
 +        return;
-+    const std::string code = kDeepCopy +
++    const std::string code = std::string(kDeepCopy) +
 +        "local OPT, IMP, AWA = " + (options ? "true" : "false") + ", " + (imprints ? "true" : "false") +
 +        ", " + (awakening ? "true" : "false") + "\n" +
 +        "local SRC = " + std::to_string(sourceIndex) + "\n" + R"lua(
@@ -1560,10 +1560,10 @@ index 0000000..4072697
 +}
 diff --git a/src/game/unitplanner.h b/src/game/unitplanner.h
 new file mode 100644
-index 0000000..37fae66
+index 0000000..c0489b3
 --- /dev/null
 +++ b/src/game/unitplanner.h
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,35 @@
 +#pragma once
 +
 +#include <string>
@@ -1584,6 +1584,7 @@ index 0000000..37fae66
 +    };
 +
 +    const std::vector<Row>& Rows() const { return rows_; }
++    std::vector<Row>& RowsMutable() { return rows_; }
 +    int Count() const { return static_cast<int>(rows_.size()); }
 +
 +    void ApplyTable();
@@ -2223,7 +2224,7 @@ index 0000000..23e37a4
 +} // namespace ui
 diff --git a/src/ui/page_planner.cpp b/src/ui/page_planner.cpp
 new file mode 100644
-index 0000000..d72d9c7
+index 0000000..34751f9
 --- /dev/null
 +++ b/src/ui/page_planner.cpp
 @@ -0,0 +1,128 @@
@@ -2251,7 +2252,7 @@ index 0000000..d72d9c7
 +    ErrorText(planner.Error());
 +    HintText(planner.Message());
 +
-+    const auto& rows = planner.Rows();
++    auto& rows = planner.RowsMutable();
 +    ImGui::TextDisabled("当前阵容 %d 个单位；改完点对应的应用按钮", planner.Count());
 +    ImGui::BeginDisabled(planner.Busy());
 +
