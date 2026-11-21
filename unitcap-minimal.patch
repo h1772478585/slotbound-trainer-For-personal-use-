@@ -23,7 +23,7 @@ index c29eed1..7b33aee 100644
      src/ui/page_system.cpp
  )
 diff --git a/src/app/config.cpp b/src/app/config.cpp
-index 0d6be7a..65b8907 100644
+index 0d6be7a..9487e8c 100644
 --- a/src/app/config.cpp
 +++ b/src/app/config.cpp
 @@ -102,6 +102,32 @@ bool LoadConfig(const std::wstring& path, Config& cfg)
@@ -52,8 +52,8 @@ index 0d6be7a..65b8907 100644
 +    cfg.damageMulPct = ReadInt(path, L"battle", L"damage_pct", cfg.damageMulPct);
 +    cfg.oneHitKill = ReadBool(path, L"battle", L"one_hit", cfg.oneHitKill);
 +    cfg.lifePointsAdd = ReadInt(path, L"battle", L"life_points_add", cfg.lifePointsAdd);
-+    const std::wstring sym = ReadStr(path, L"battle", L"unit_symbol", L"W");
-+    cfg.addUnitSymbol = sym.empty() ? "W" : std::string(1, static_cast<char>(sym[0]));
++    const std::wstring unitSym = ReadStr(path, L"battle", L"unit_symbol", L"W");
++    cfg.addUnitSymbol = unitSym.empty() ? "W" : std::string(1, static_cast<char>(unitSym[0]));
 +    cfg.addUnitCount = ReadInt(path, L"battle", L"unit_count", cfg.addUnitCount);
 +
      cfg.overlay = ReadBool(path, L"debug", L"overlay", cfg.overlay);
